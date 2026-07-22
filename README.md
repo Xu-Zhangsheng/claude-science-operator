@@ -10,8 +10,6 @@ It uses the version-gated local API for routine project and session work, and fa
 
 ![Loop Engineering：疯科学家将压力传递给 Codex，Codex 再传递给 Claude Science](docs/illustrations/loop-engineering-pressure.png)
 
-第一张图用夸张的二次元漫画语言把任务压力的传递画出来：人把目标和边界交给 Codex；Codex 把执行单元交给 Claude Science；Claude Science 在压力下持续研究和产出。图中的鞭打、痛感和癫狂表情是戏剧化隐喻，用来提醒我们：高效的调度如果失去检查与授权，会把压力沿链路传下去。
-
 这个闭环的重点不是“让模型不断干活”，而是让每一轮都产生可以判断的状态、证据和下一步选择：
 
 1. **定向**：人定义目标、约束、成功标准，以及哪些动作必须先确认。
@@ -21,8 +19,6 @@ It uses the version-gated local API for routine project and session work, and fa
 5. **决策**：继续下一轮、修正方向、接受结果，或明确停止。
 
 ![Loop Engineering：斯文猴在前景努力理解 Codex 与 Claude Science 的高压交谈](docs/illustrations/loop-engineering-listening.png)
-
-第二张图是闭环里很关键但常被忽略的一步：**倾听与校准**。当 Codex 和 Claude Science 的对话足够复杂时，操作员要回到“认真听、努力理解”的位置，检查它们是否仍在解决原问题，而不是只是在高效地完成错误任务。
 
 ### 角色边界
 
