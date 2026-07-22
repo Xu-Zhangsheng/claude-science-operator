@@ -1,0 +1,30 @@
+{
+  "name": "claude-science-operator",
+  "version": "0.1.0+codex.20260721055001",
+  "description": "Operate a local Claude Science instance through CSSwitch, a version-gated local API bridge, and GUI fallback.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Claude Science Operator",
+    "shortDescription": "Operate Claude Science with API and GUI fallback.",
+    "longDescription": "Claude Science Operator lets Codex inspect and run research tasks in the locally installed Claude Science app. It uses a version-gated loopback API bridge when compatible and CSSwitch plus macOS Computer Use for startup, approvals, uploads, and fallback operation.",
+    "developerName": "Local developer",
+    "category": "Research",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Run this research task in Claude Science.",
+      "Continue my Claude Science session.",
+      "Check Claude Science and list recent projects."
+    ],
+    "brandColor": "#DD704A",
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  },
+  "mcpServers": "./.mcp.json"
+}

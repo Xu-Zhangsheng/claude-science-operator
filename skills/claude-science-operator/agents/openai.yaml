@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Science Operator"
+  short_description: "Operate Claude Science with API and GUI fallback"
+  default_prompt: "Use $claude-science-operator to run this research task in Claude Science and return the result."

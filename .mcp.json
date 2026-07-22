@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "claude-science-operator": {
+      "cwd": ".",
+      "command": "node",
+      "args": ["./scripts/server.mjs"]
+    }
+  }
+}
