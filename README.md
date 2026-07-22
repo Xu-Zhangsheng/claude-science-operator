@@ -4,6 +4,39 @@ Claude Science Operator is a Codex plugin for operating a locally installed Clau
 
 It uses the version-gated local API for routine project and session work, and falls back to the macOS GUI when startup, authentication, approvals, uploads, downloads, exports, or artifact interaction require visible user interaction.
 
+## Loop Engineering：把协作做成闭环
+
+这套插件背后的工作方式是 **Loop Engineering**：人不是把任务丢给模型后等待结果，而是和两个不同职责的智能伙伴组成一个可观察、可纠偏、可停止的闭环。
+
+![Loop Engineering：疯科学家将压力传递给 Codex，Codex 再传递给 Claude Science](docs/illustrations/loop-engineering-pressure.png)
+
+第一张图用夸张的二次元漫画语言把任务压力的传递画出来：人把目标和边界交给 Codex；Codex 把执行单元交给 Claude Science；Claude Science 在压力下持续研究和产出。图中的鞭打、痛感和癫狂表情是戏剧化隐喻，用来提醒我们：高效的调度如果失去检查与授权，会把压力沿链路传下去。
+
+这个闭环的重点不是“让模型不断干活”，而是让每一轮都产生可以判断的状态、证据和下一步选择：
+
+1. **定向**：人定义目标、约束、成功标准，以及哪些动作必须先确认。
+2. **编排**：Codex 澄清任务、选择合适工具和执行路径，并保留可追踪的上下文。
+3. **执行**：Claude Science 处理适合它的研究与任务工作，遇到登录、上传、审批或不确定结果时停下来。
+4. **检视**：Codex 汇总进度、结果和风险；人检查关键结论、工件与外部影响。
+5. **决策**：继续下一轮、修正方向、接受结果，或明确停止。
+
+![Loop Engineering：斯文猴在前景努力理解 Codex 与 Claude Science 的高压交谈](docs/illustrations/loop-engineering-listening.png)
+
+第二张图是闭环里很关键但常被忽略的一步：**倾听与校准**。当 Codex 和 Claude Science 的对话足够复杂时，操作员要回到“认真听、努力理解”的位置，检查它们是否仍在解决原问题，而不是只是在高效地完成错误任务。
+
+### 角色边界
+
+- **人**：拥有目标、授权、预算、风险判断和最终决定权。
+- **Codex**：负责任务编排、状态汇总、工具协调、验证与安全停止。
+- **Claude Science**：负责聚焦的研究、分析和执行；它不是最终授权者。
+
+### 实践原则
+
+- 每一轮都应留下可检查的工件、结论或状态，而不只是“已完成”的口头声明。
+- 有外部影响的动作（登录、上传、付费、发信、审批、敏感数据传输）必须回到人来确认。
+- 遇到不确定写入、兼容性变化或目标模糊时，宁可暂停澄清，也不假装已经安全完成。
+- 好的循环会逐轮缩小不确定性；当收益不再覆盖成本时，应显式结束循环。
+
 ## Requirements
 
 - macOS
@@ -39,6 +72,7 @@ For normal online installation, the GitHub Marketplace method above is recommend
 - `plugins/claude-science-operator/scripts/server.test.mjs` — automated tests
 - `plugins/claude-science-operator/skills/` — Codex skill instructions and references
 - `plugins/claude-science-operator/assets/logo.png` — plugin icon
+- `docs/illustrations/` — Loop Engineering manga illustrations
 
 ## Test
 
