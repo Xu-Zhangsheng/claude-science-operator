@@ -1,7 +1,7 @@
 {
-  "name": "claude-science-operator",
+  "name": "claude-science-split-local",
   "interface": {
-    "displayName": "Claude Science Operator"
+    "displayName": "Claude Science Split Local"
   },
   "plugins": [
     {
@@ -15,6 +15,18 @@
         "authentication": "ON_INSTALL"
       },
       "category": "Research"
+    },
+    {
+      "name": "csswitch-operator",
+      "source": {
+        "source": "local",
+        "path": "./plugins/csswitch-operator"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
     }
   ]
 }

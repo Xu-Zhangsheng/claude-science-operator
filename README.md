@@ -1,8 +1,8 @@
-# Claude Science Operator
+# Claude Science Operator Plugin Marketplace
 
-Claude Science Operator is a Codex plugin for operating a locally installed Claude Science instance through CSSwitch.
+This repository contains the Claude Science Operator and CSSwitch Operator Codex plugins.
 
-It uses the version-gated local API for routine project and session work, and falls back to the macOS GUI when startup, authentication, approvals, uploads, downloads, exports, or artifact interaction require visible user interaction.
+Claude Science Operator uses the version-gated local API for routine project and session work, exact Safari page targeting for visible web UI, and macOS Computer Use for startup, authentication, approvals, uploads, downloads, exports, and artifact interaction. CSSwitch Operator owns the separate authenticated CSSwitch control bridge.
 
 ## Loop Engineering：把协作做成闭环
 
@@ -36,7 +36,7 @@ It uses the version-gated local API for routine project and session work, and fa
 ## Requirements
 
 - macOS
-- Claude Science `0.1.20`
+- Claude Science `0.1.20`, `0.1.25`, or `0.1.43`
 - CSSwitch schema `4`
 - Node.js
 
@@ -44,38 +44,41 @@ The API channel is enabled only when the Claude Science binary, running process,
 
 ## Install from GitHub
 
-Add this repository as a Codex plugin marketplace, then install the plugin:
+Add this repository as a Codex plugin marketplace, then install the plugins:
 
 ```bash
 codex plugin marketplace add Xu-Zhangsheng/claude-science-operator --ref main
-codex plugin add claude-science-operator@claude-science-operator
+codex plugin add claude-science-operator@claude-science-split-local
+codex plugin add csswitch-operator@claude-science-split-local
 ```
 
 Start a new Codex task after installation so the new skill and MCP server are loaded.
 
 ## Install from the package
 
-Download `claude-science-operator-0.1.0.zip` from the [GitHub Release](https://github.com/Xu-Zhangsheng/claude-science-operator/releases/latest), extract it into `~/plugins/`, and install it through a local marketplace entry. The archive contains the complete plugin directory, including its manifest, MCP server, skills, references, tests, and logo.
+Download the release archive from the [GitHub Release](https://github.com/Xu-Zhangsheng/claude-science-operator/releases/latest), extract it into `~/plugins/`, and install the desired plugin through a local marketplace entry. The archive contains the marketplace catalog and both plugin directories.
 
 For normal online installation, the GitHub Marketplace method above is recommended.
 
 ## Repository layout
 
-- `.agents/plugins/marketplace.json` — Codex marketplace catalog
+- `.agents/plugins/marketplace.json` — Codex marketplace catalog (`claude-science-split-local`)
 - `plugins/claude-science-operator/.codex-plugin/plugin.json` — plugin manifest
 - `plugins/claude-science-operator/.mcp.json` — MCP server configuration
 - `plugins/claude-science-operator/scripts/server.mjs` — local operator server
 - `plugins/claude-science-operator/scripts/server.test.mjs` — automated tests
 - `plugins/claude-science-operator/skills/` — Codex skill instructions and references
 - `plugins/claude-science-operator/assets/logo.png` — plugin icon
+- `plugins/csswitch-operator/` — independent CSSwitch control plugin
 - `docs/illustrations/` — Loop Engineering manga illustrations
 
 ## Test
 
 ```bash
 node --test plugins/claude-science-operator/scripts/server.test.mjs
+node --test plugins/csswitch-operator/scripts/server.test.mjs
 ```
 
 ## Safety
 
-The operator communicates with Claude Science through loopback-only endpoints, validates the expected runtime version and CSSwitch schema, and does not expose local credentials. Writes use unique intent IDs; an uncertain write result is never automatically retried.
+The operators communicate with local loopback endpoints, validate runtime and schema compatibility, and do not expose local credentials. Writes use unique intent IDs; an uncertain write result is never automatically retried. Claude Science API use is enabled only for the explicit version allowlist; unknown versions fall back to GUI routing.

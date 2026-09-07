@@ -1,0 +1,27 @@
+{
+  "name": "csswitch-operator",
+  "version": "0.2.0+codex.20260728113518",
+  "description": "Operate CSSwitch through an authenticated external control bridge, with native-bridge compatibility.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "CSSwitch Operator",
+    "shortDescription": "Control CSSwitch profiles, models, settings, and runtime.",
+    "longDescription": "CSSwitch Operator gives Codex a guarded path to inspect and manage CSSwitch. It prefers the standalone authenticated loopback bridge, so CSSwitch app updates do not overwrite the control layer; native bridge support remains a compatibility fallback.",
+    "developerName": "Local developer",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Check CSSwitch and show the active profile.",
+      "List CSSwitch profiles and model settings.",
+      "Open the CSSwitch settings I need to change."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

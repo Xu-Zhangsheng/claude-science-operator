@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "csswitch-operator": {
+      "cwd": ".",
+      "command": "node",
+      "args": ["./scripts/server.mjs"]
+    }
+  }
+}

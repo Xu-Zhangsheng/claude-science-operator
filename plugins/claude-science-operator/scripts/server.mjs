@@ -9,11 +9,12 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export const SUPPORTED_SCIENCE_VERSION = "0.1.20";
+export const SUPPORTED_SCIENCE_VERSIONS = Object.freeze(["0.1.20", "0.1.25", "0.1.43"]);
+export const SUPPORTED_SCIENCE_VERSION = SUPPORTED_SCIENCE_VERSIONS.at(-1);
 export const SUPPORTED_CSSWITCH_SCHEMA = 4;
 
 const SERVER_NAME = "Claude Science Operator";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 const APP_PATH = "/Applications/Claude Science.app";
 const CSSWITCH_APP_PATH = "/Applications/CSSwitch.app";
 const BINARY_PATH = `${APP_PATH}/Contents/Resources/bin/claude-science`;
@@ -94,9 +95,33 @@ function optionalBoolean(value, name, defaultValue = undefined) {
   return value;
 }
 
+function requireObject(value, name, maxBytes = 256 * 1024) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new OperatorError("INVALID_PARAMS", `${name} must be an object.`);
+  }
+  let encoded;
+  try {
+    encoded = JSON.stringify(value);
+  } catch {
+    throw new OperatorError("INVALID_PARAMS", `${name} must be JSON-serializable.`);
+  }
+  if (Buffer.byteLength(encoded) > maxBytes) {
+    throw new OperatorError("INVALID_PARAMS", `${name} is too large.`);
+  }
+  return JSON.parse(encoded);
+}
+
 function safeId(value, name) {
   const result = requireString(value, name, 256);
   if (!/^[A-Za-z0-9._:-]+$/.test(result)) {
+    throw new OperatorError("INVALID_PARAMS", `${name} contains unsupported characters.`);
+  }
+  return result;
+}
+
+function safeAgentName(value, name = "name") {
+  const result = requireString(value, name, 200);
+  if (/[/,\0\r\n]/.test(result)) {
     throw new OperatorError("INVALID_PARAMS", `${name} contains unsupported characters.`);
   }
   return result;
@@ -134,7 +159,7 @@ export function publicConfig(config) {
 
 export function isApiCompatible({ scienceVersion, schemaVersion, binaryVerified, running, healthy, portMatches }) {
   return (
-    scienceVersion === SUPPORTED_SCIENCE_VERSION &&
+    SUPPORTED_SCIENCE_VERSIONS.includes(scienceVersion) &&
     schemaVersion === SUPPORTED_CSSWITCH_SCHEMA &&
     binaryVerified === true &&
     running === true &&
@@ -290,6 +315,278 @@ async function runBinary(binary, args, env, timeout = 10_000) {
     }
     throw new OperatorError("SCIENCE_CONTROL_FAILED", "Claude Science command failed.");
   }
+}
+
+async function runOsascript(args, operation, timeout = 15_000) {
+  try {
+    const result = await execFileAsync("/usr/bin/osascript", args, {
+      encoding: "utf8",
+      timeout,
+      maxBuffer: RESPONSE_LIMIT,
+      windowsHide: true,
+    });
+    return String(result.stdout || result.stderr || "").trim();
+  } catch (error) {
+    const message = String(error?.stderr || error?.message || "Safari automation failed.");
+    if (message.includes("Allow JavaScript from Apple Events")) {
+      throw new OperatorError(
+        "SAFARI_JAVASCRIPT_DISABLED",
+        "Enable Safari Develop > Allow JavaScript from Apple Events, then retry.",
+      );
+    }
+    if (message.includes("not allowed") || message.includes("not authorized")) {
+      throw new OperatorError(
+        "SAFARI_AUTOMATION_PERMISSION",
+        "Allow this Codex/Node process to control Safari in macOS Privacy & Security > Automation.",
+      );
+    }
+    throw new OperatorError("SAFARI_FAILED", `${operation} failed.`);
+  }
+}
+
+async function listSafariTabs() {
+  const script = `
+const Safari = Application("Safari");
+function safe(value) { try { return String(value()); } catch { return ""; } }
+const result = Safari.windows().map((window, wi) => ({
+  window_index: wi + 1,
+  current_tab_index: (() => { try { return Number(window.currentTab().index()); } catch { return 1; } })(),
+  tabs: window.tabs().map((tab, ti) => ({
+    id: "w" + (wi + 1) + "-t" + (ti + 1),
+    window_index: wi + 1,
+    tab_index: ti + 1,
+    title: safe(tab.name),
+    url: safe(tab.url),
+  })),
+}));
+console.log(JSON.stringify(result));
+`;
+  const output = await runOsascript(["-l", "JavaScript", "-e", script], "Safari tab discovery");
+  try {
+    const value = JSON.parse(output);
+    if (!Array.isArray(value)) throw new Error("not an array");
+    return value;
+  } catch {
+    throw new OperatorError("SAFARI_FAILED", "Safari tab discovery returned invalid data.");
+  }
+}
+
+function normalizePathname(value) {
+  return value.length > 1 && value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function scienceRoute(pathname) {
+  const normalized = normalizePathname(pathname);
+  const frame = /^\/projects\/([A-Za-z0-9._:-]+)\/frames\/([A-Za-z0-9._:-]+)$/.exec(normalized);
+  if (frame) return {kind: "frame", project_id: frame[1], frame_id: frame[2]};
+  const project = /^\/projects\/([A-Za-z0-9._:-]+)$/.exec(normalized);
+  if (project) return {kind: "project", project_id: project[1]};
+  return undefined;
+}
+
+export function selectExactSciencePage(tabs, {
+  port,
+  projectId,
+  frameId,
+} = {}) {
+  if (!validPort(port)) throw new OperatorError("INVALID_PARAMS", "port must be a valid TCP port.");
+  const safeProject = safeId(projectId, "project_id");
+  const safeFrame = frameId === undefined ? undefined : safeId(frameId, "frame_id");
+  const flat = Array.isArray(tabs)
+    ? tabs.flatMap((window) => Array.isArray(window?.tabs) ? window.tabs : [])
+    : [];
+  const candidates = [];
+  for (const tab of flat) {
+    let url;
+    try {
+      url = new URL(tab?.url);
+    } catch {
+      continue;
+    }
+    if (
+      url.protocol !== "http:" ||
+      !["localhost", "127.0.0.1"].includes(url.hostname) ||
+      Number(url.port) !== port ||
+      String(tab?.title || "").trim() !== "Claude Science"
+    ) {
+      continue;
+    }
+    const route = scienceRoute(url.pathname);
+    if (!route || route.project_id !== safeProject) continue;
+    if (safeFrame ? route.frame_id !== safeFrame : route.kind !== "project") continue;
+    candidates.push({
+      tab_id: String(tab.id || ""),
+      window_index: tab.window_index,
+      tab_index: tab.tab_index,
+      title: String(tab.title || ""),
+      url: url.href,
+      route,
+    });
+  }
+  return {
+    matched: candidates.length === 1,
+    reason: candidates.length === 0 ? "not_found" : candidates.length === 1 ? "exact" : "ambiguous",
+    candidates,
+  };
+}
+
+function tabPosition(value) {
+  const id = requireString(value, "tab_id", 64);
+  const match = /^w([1-9][0-9]*)-t([1-9][0-9]*)$/.exec(id);
+  if (!match) throw new OperatorError("SAFARI_FAILED", "Safari tab identity is invalid.");
+  return {windowIndex: Number(match[1]), tabIndex: Number(match[2])};
+}
+
+async function runSafariPageJavaScript(tabId, javascript) {
+  const {windowIndex, tabIndex} = tabPosition(tabId);
+  const script = `on run argv
+set javascriptSource to item 1 of argv
+set windowIndex to (item 2 of argv) as integer
+set tabIndex to (item 3 of argv) as integer
+tell application "Safari"
+return do JavaScript javascriptSource in tab tabIndex of window windowIndex
+end tell
+end run`;
+  return runOsascript(
+    ["-e", script, "--", javascript, String(windowIndex), String(tabIndex)],
+    "Safari page operation",
+  );
+}
+
+async function focusSafariPage(page) {
+  const {windowIndex, tabIndex} = tabPosition(page.tab_id);
+  const script = `function run(argv) {
+  const Safari = Application("Safari");
+  const windowIndex = Number(argv[0]);
+  const tabIndex = Number(argv[1]);
+  const expectedUrl = String(argv[2]);
+  const window = Safari.windows()[windowIndex - 1];
+  const tab = window.tabs()[tabIndex - 1];
+  if (String(tab.url()) !== expectedUrl) {
+    console.log(JSON.stringify({ok:false, code:"SCIENCE_PAGE_IDENTITY_CHANGED"}));
+    return;
+  }
+  window.currentTab = tab;
+  window.index = 1;
+  Safari.activate();
+  console.log(JSON.stringify({ok:true}));
+}`;
+  const output = await runOsascript(
+    [
+      "-l",
+      "JavaScript",
+      "-e",
+      script,
+      "--",
+      String(windowIndex),
+      String(tabIndex),
+      page.url,
+    ],
+    "Safari page focus",
+  );
+  try {
+    return JSON.parse(output);
+  } catch {
+    throw new OperatorError("SAFARI_FAILED", "Safari page focus returned invalid data.");
+  }
+}
+
+export function buildSciencePageScript({
+  port,
+  projectId,
+  frameId,
+  action,
+  role,
+  name,
+  context,
+  value,
+}) {
+  const expectedPath = frameId
+    ? `/projects/${encodeURIComponent(projectId)}/frames/${encodeURIComponent(frameId)}`
+    : `/projects/${encodeURIComponent(projectId)}`;
+  const input = JSON.stringify({
+    port,
+    expectedPath,
+    action,
+    role: role || null,
+    name: name || null,
+    context: context || null,
+    value: value ?? null,
+  });
+  return `(() => {
+  const input = ${input};
+  const normalizedPath = location.pathname.length > 1 && location.pathname.endsWith("/")
+    ? location.pathname.slice(0, -1) : location.pathname;
+  if (
+    location.protocol !== "http:" ||
+    !["localhost", "127.0.0.1"].includes(location.hostname) ||
+    Number(location.port) !== input.port ||
+    normalizedPath !== input.expectedPath ||
+    document.title.trim() !== "Claude Science"
+  ) return JSON.stringify({ok:false, code:"SCIENCE_PAGE_IDENTITY_CHANGED"});
+  const normalize = (text) => String(text || "").replace(/\\s+/g, " ").trim();
+  const visible = (node) => {
+    if (!(node instanceof Element)) return false;
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  };
+  const inferredRole = (node) => node.getAttribute("role") ||
+    (node.tagName === "BUTTON" ? "button" :
+     node.tagName === "A" ? "link" :
+     ["INPUT", "TEXTAREA"].includes(node.tagName) || node.isContentEditable ? "textbox" : "");
+  const accessibleName = (node) => normalize(
+    node.getAttribute("aria-label") ||
+    node.getAttribute("placeholder") ||
+    node.innerText ||
+    node.textContent
+  );
+  const anchor = [...document.querySelectorAll("button,[role],[aria-label]")]
+    .some((node) => visible(node) && (
+      accessibleName(node) === "Customize" ||
+      accessibleName(node) === "New" ||
+      String(node.getAttribute("aria-label") || "").startsWith("Model:")
+    ));
+  if (!anchor) return JSON.stringify({ok:false, code:"SCIENCE_PAGE_DOM_MISMATCH"});
+  if (input.action === "snapshot") {
+    const nodes = [...document.querySelectorAll("a,button,input,textarea,select,[role],[contenteditable='true'],h1,h2,h3")]
+      .filter(visible).slice(0, 2000).map((node) => ({
+        tag: node.tagName.toLowerCase(),
+        role: inferredRole(node) || null,
+        name: accessibleName(node).slice(0, 500),
+        selected: node.getAttribute("aria-selected"),
+        checked: node.getAttribute("aria-checked"),
+      }));
+    return JSON.stringify({
+      ok:true,
+      url:location.href,
+      title:document.title,
+      nodes,
+      text:normalize(document.body.innerText).slice(0, 20000),
+    });
+  }
+  const nodes = [...document.querySelectorAll("a,button,input,textarea,select,[role],[contenteditable='true']")]
+    .filter((node) => visible(node))
+    .filter((node) => !input.role || inferredRole(node) === input.role)
+    .filter((node) => accessibleName(node) === normalize(input.name))
+    .filter((node) => !input.context || normalize(node.parentElement?.innerText).includes(normalize(input.context)));
+  if (nodes.length === 0) return JSON.stringify({ok:false, code:"SCIENCE_ELEMENT_NOT_FOUND"});
+  if (nodes.length !== 1) return JSON.stringify({ok:false, code:"SCIENCE_ELEMENT_AMBIGUOUS", count:nodes.length});
+  const node = nodes[0];
+  node.scrollIntoView({block:"center", inline:"nearest"});
+  if (input.action === "click") {
+    node.click();
+  } else if (input.action === "fill") {
+    node.focus();
+    if (node.isContentEditable) node.textContent = input.value;
+    else node.value = input.value;
+    node.dispatchEvent(new Event("input", {bubbles:true}));
+    node.dispatchEvent(new Event("change", {bubbles:true}));
+  } else {
+    return JSON.stringify({ok:false, code:"SCIENCE_SAFARI_ACTION_INVALID"});
+  }
+  return JSON.stringify({ok:true, action:input.action, role:inferredRole(node), name:accessibleName(node)});
+})()`;
 }
 
 async function readBodyLimited(response, limit) {
@@ -574,7 +871,7 @@ export class RuntimeInspector {
       portMatches,
     });
     const reasons = [];
-    if (scienceVersion !== SUPPORTED_SCIENCE_VERSION) reasons.push("unsupported_science_version");
+    if (!SUPPORTED_SCIENCE_VERSIONS.includes(scienceVersion)) reasons.push("unsupported_science_version");
     if (config.schema_version !== SUPPORTED_CSSWITCH_SCHEMA) reasons.push("unsupported_csswitch_schema");
     if (!binaryVerified) reasons.push("binary_not_verified");
     if (!processStatus.running) reasons.push("science_not_running");
@@ -600,6 +897,7 @@ export class RuntimeInspector {
       recommendedChannel: apiCompatible ? "api" : "gui",
       compatibility: {
         supportedScienceVersion: SUPPORTED_SCIENCE_VERSION,
+        supportedScienceVersions: SUPPORTED_SCIENCE_VERSIONS,
         supportedCsswitchSchema: SUPPORTED_CSSWITCH_SCHEMA,
         reasons,
       },
@@ -938,6 +1236,376 @@ async function listArtifactsOperation(inspector, args) {
   );
 }
 
+function confirmationIntent(args, operation) {
+  if (optionalBoolean(args.confirm, "confirm", false) !== true) {
+    throw new OperatorError(
+      "CONFIRMATION_REQUIRED",
+      `${operation} requires confirm=true after reviewing the exact target and requested change.`,
+    );
+  }
+  return crypto.randomUUID();
+}
+
+function rejectSensitiveFields(value, path = "payload") {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => rejectSensitiveFields(item, `${path}[${index}]`));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (/(?:password|secret|token|credential|api[_-]?key|cookie)/i.test(key)) {
+      throw new OperatorError("INVALID_PARAMS", `${path}.${key} is not accepted by this tool.`);
+    }
+    rejectSensitiveFields(nested, `${path}.${key}`);
+  }
+}
+
+function normalizeExpert(agent, includePrompt = false) {
+  const metadata = agent?.metadata && typeof agent.metadata === "object" ? agent.metadata : {};
+  const result = selectFields(agent, [
+    "name",
+    "description",
+    "enabled",
+    "healthy",
+    "source",
+    "supportsPlanMode",
+    "skillsLocked",
+    "unrestricted",
+    "userHidden",
+  ]);
+  result.skills = Array.isArray(metadata.skills) ? metadata.skills : [];
+  result.connectors = Array.isArray(metadata.mcp_servers) ? metadata.mcp_servers : [];
+  result.tools = Array.isArray(metadata.tools) ? metadata.tools : [];
+  result.excluded_tools = Array.isArray(metadata.excluded_tools) ? metadata.excluded_tools : [];
+  result.tags = Array.isArray(metadata.tags) ? metadata.tags : [];
+  result.parameters = agent?.parameters && typeof agent.parameters === "object" ? agent.parameters : {};
+  if (includePrompt) {
+    result.system_prompt =
+      typeof agent?.systemPrompt === "string"
+        ? agent.systemPrompt
+        : typeof metadata.system_prompt === "string"
+          ? metadata.system_prompt
+          : undefined;
+  }
+  return result;
+}
+
+async function listExpertsOperation(inspector, args) {
+  const includePrompt = optionalBoolean(args.include_prompt, "include_prompt", false);
+  const names = Array.isArray(args.names)
+    ? args.names.map((name) => safeAgentName(name, "names[]"))
+    : undefined;
+  const query = new URLSearchParams({include_metadata: "true"});
+  if (names?.length) query.set("names", names.join(","));
+  const client = await inspector.client();
+  const data = await client.request(`/api/agents?${query}`);
+  const experts = listFrom(data, "agents").map((agent) => normalizeExpert(agent, includePrompt));
+  return toolResult(`Found ${experts.length} Claude Science expert(s).`, {experts});
+}
+
+function normalizedExpertPayload(value, name, {create = false} = {}) {
+  const payload = requireObject(value, name);
+  rejectSensitiveFields(payload, name);
+  if (typeof payload.system_prompt === "string" && payload.systemPrompt === undefined) {
+    payload.systemPrompt = payload.system_prompt;
+    delete payload.system_prompt;
+  }
+  if (typeof payload.display_name === "string" && payload.displayName === undefined) {
+    payload.displayName = payload.display_name;
+    delete payload.display_name;
+  }
+  if (Array.isArray(payload.skill_names) && payload.skillNames === undefined) {
+    payload.skillNames = payload.skill_names;
+    delete payload.skill_names;
+  }
+  if (create) {
+    const suppliedName = requireString(payload.name, `${name}.name`, 200);
+    payload.displayName =
+      typeof payload.displayName === "string" && payload.displayName.trim()
+        ? payload.displayName.trim()
+        : suppliedName;
+    payload.name = suppliedName
+      .normalize("NFKD")
+      .replace(/[^A-Za-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .toUpperCase();
+    if (!/^[A-Z0-9_]{2,32}$/.test(payload.name)) {
+      throw new OperatorError(
+        "INVALID_PARAMS",
+        `${name}.name must produce a 2-32 character A-Z, 0-9, underscore expert id.`,
+      );
+    }
+    if (typeof payload.description !== "string") payload.description = "";
+    if (typeof payload.systemPrompt !== "string") payload.systemPrompt = "";
+  }
+  return payload;
+}
+
+async function expertActionOperation(inspector, args) {
+  const action = requireString(args.action, "action", 64);
+  const intentId = action === "get_prompt" ? undefined : confirmationIntent(args, `expert action ${action}`);
+  const client = await inspector.client();
+  let method;
+  let route;
+  let body;
+  const name = args.name === undefined ? undefined : safeAgentName(args.name, "name");
+  if (action === "create") {
+    method = "POST";
+    route = "/api/agents";
+    body = normalizedExpertPayload(args.expert, "expert", {create: true});
+  } else {
+    if (!name) throw new OperatorError("INVALID_PARAMS", "name is required for this expert action.");
+    const encodedName = encodeURIComponent(name);
+    if (action === "update") {
+      method = "PATCH";
+      route = `/api/agents/${encodedName}`;
+      body = normalizedExpertPayload(args.patch, "patch");
+    } else if (action === "delete") {
+      method = "DELETE";
+      route = `/api/agents/${encodedName}`;
+    } else if (action === "set_enabled") {
+      method = "POST";
+      route = `/api/agents/${encodedName}/enabled`;
+      const enabled = optionalBoolean(args.enabled, "enabled");
+      if (enabled === undefined) throw new OperatorError("INVALID_PARAMS", "enabled is required.");
+      body = {enabled};
+    } else if (action === "get_prompt") {
+      method = "GET";
+      route = `/api/agents/${encodedName}/custom-prompt`;
+    } else if (action === "set_prompt") {
+      method = "PUT";
+      route = `/api/agents/${encodedName}/custom-prompt`;
+      body = {prompt_text: requireString(args.prompt_text, "prompt_text")};
+    } else if (action === "delete_prompt") {
+      method = "DELETE";
+      route = `/api/agents/${encodedName}/custom-prompt`;
+    } else if (action === "attach_skill") {
+      method = "POST";
+      route = `/api/agents/${encodedName}/skills`;
+      body = {skill_name: safeId(args.skill_name, "skill_name")};
+    } else if (action === "detach_skill") {
+      method = "DELETE";
+      route = `/api/agents/${encodedName}/skills/${encodeURIComponent(safeId(args.skill_name, "skill_name"))}`;
+    } else if (action === "update_skills") {
+      method = "PUT";
+      route = `/api/agents/${encodedName}/skills`;
+      body = {
+        attach: Array.isArray(args.attach) ? args.attach.map((item) => safeId(item, "attach[]")) : [],
+        detach: Array.isArray(args.detach) ? args.detach.map((item) => safeId(item, "detach[]")) : [],
+      };
+    } else if (action === "attach_connector") {
+      method = "POST";
+      route = `/api/agents/${encodedName}/connectors`;
+      body = {
+        server_id: safeId(args.server_id, "server_id"),
+        includeToolsPattern: optionalString(args.include_tools_pattern, "include_tools_pattern", 2_000),
+        excludeToolsPattern: optionalString(args.exclude_tools_pattern, "exclude_tools_pattern", 2_000),
+        allowUnauthorized: optionalBoolean(args.allow_unauthorized, "allow_unauthorized", false),
+      };
+    } else if (action === "detach_connector") {
+      method = "DELETE";
+      route = `/api/agents/${encodedName}/connectors/${encodeURIComponent(safeId(args.server_id, "server_id"))}`;
+    } else if (action === "set_connector_exclusions") {
+      method = "PUT";
+      route = `/api/agents/${encodedName}/connectors/${encodeURIComponent(safeId(args.server_id, "server_id"))}/exclusions`;
+      body = {
+        excludedTools: Array.isArray(args.excluded_tools)
+          ? args.excluded_tools.map((item) => safeId(item, "excluded_tools[]"))
+          : [],
+      };
+    } else {
+      throw new OperatorError("INVALID_PARAMS", `Unsupported expert action: ${action}.`);
+    }
+  }
+  const response = await client.request(route, {
+    method,
+    body,
+    write: method !== "GET",
+    intentId,
+    operation: `expert:${action}`,
+  });
+  return toolResult(`Completed Claude Science expert action ${action}.`, {
+    action,
+    name,
+    intent_id: intentId,
+    result: response,
+  });
+}
+
+export function normalizeModelCatalog(data) {
+  const groups = data?.models && typeof data.models === "object" ? data.models : {};
+  const models = [];
+  for (const [provider, value] of Object.entries(groups)) {
+    const items = Array.isArray(value) ? value : [];
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      models.push({
+        provider,
+        id: typeof item.id === "string" ? item.id : undefined,
+        name: typeof item.name === "string" ? item.name : undefined,
+        overflow: typeof item.overflow === "boolean" ? item.overflow : undefined,
+      });
+    }
+  }
+  return {
+    default_model_id: typeof data?.default_model_id === "string" ? data.default_model_id : undefined,
+    models,
+  };
+}
+
+async function listModelsOperation(inspector, args) {
+  const provider = optionalString(args.provider, "provider", 200);
+  const query = provider ? `?${new URLSearchParams({provider})}` : "";
+  const client = await inspector.client();
+  const data = await client.request(`/api/models${query}`);
+  const catalog = normalizeModelCatalog(data);
+  return toolResult(`Found ${catalog.models.length} Claude Science model(s).`, catalog);
+}
+
+const SETTING_DEFINITIONS = {
+  reviewer_model: {
+    route: "/api/preferences/reviewer-model",
+    body: (value) => ({model: value}),
+  },
+  allowed_domains: {
+    route: "/api/preferences/allowed-domains",
+    body: (value) => ({domains: value}),
+  },
+  builtin_allowlist_disabled: {
+    route: "/api/preferences/builtin-allowlist/disabled",
+    getRoute: "/api/preferences/builtin-allowlist",
+    body: (value) => ({disabled: value}),
+  },
+  builtin_allowlist_disabled_groups: {
+    route: "/api/preferences/builtin-allowlist/disabled-groups",
+    getRoute: "/api/preferences/builtin-allowlist",
+    body: (value) => ({disabledGroups: value}),
+  },
+  telemetry_consent: {
+    route: "/api/preferences/telemetry-consent",
+    body: (value) => ({consent: value}),
+  },
+  git_identity: {
+    route: "/api/preferences/git-identity",
+    body: (value) => value,
+  },
+  conda_mirror: {
+    route: "/api/preferences/conda-mirror",
+    body: (value) => value,
+  },
+  use_intent: {
+    route: "/api/preferences/use-intent",
+    body: (value) => ({intent: value}),
+  },
+};
+
+async function settingsOperation(inspector, args) {
+  const action = requireString(args.action, "action", 16);
+  const setting = requireString(args.setting, "setting", 80);
+  const definition = SETTING_DEFINITIONS[setting];
+  if (!definition) throw new OperatorError("INVALID_PARAMS", `Unsupported setting: ${setting}.`);
+  const client = await inspector.client();
+  if (action === "get") {
+    const result = await client.request(definition.getRoute || definition.route);
+    return toolResult(`Read Claude Science setting ${setting}.`, {setting, result});
+  }
+  if (action !== "set") throw new OperatorError("INVALID_PARAMS", "action must be get or set.");
+  if (!Object.hasOwn(args, "value")) throw new OperatorError("INVALID_PARAMS", "value is required.");
+  const value = args.value === null ? null : JSON.parse(JSON.stringify(args.value));
+  rejectSensitiveFields(value, "value");
+  const intentId = confirmationIntent(args, `setting ${setting}`);
+  const result = await client.request(definition.route, {
+    method: "PUT",
+    body: definition.body(value),
+    write: true,
+    intentId,
+    operation: `setting:${setting}`,
+  });
+  return toolResult(`Updated Claude Science setting ${setting}.`, {
+    setting,
+    intent_id: intentId,
+    result,
+  });
+}
+
+async function safariPageOperation(inspector, args) {
+  const action = requireString(args.action, "action", 32);
+  const projectId = safeId(args.project_id, "project_id");
+  const frameId = args.frame_id === undefined ? undefined : safeId(args.frame_id, "frame_id");
+  const status = await inspector.inspect();
+  const port = status.claudeScience?.port;
+  if (!status.claudeScience?.running || !validPort(port)) {
+    throw new OperatorError("SCIENCE_PAGE_UNAVAILABLE", "Claude Science is not running on a known loopback port.");
+  }
+  const selection = selectExactSciencePage(await listSafariTabs(), {port, projectId, frameId});
+  if (action === "find") {
+    return toolResult(
+      selection.matched
+        ? "Found exactly one matching Claude Science page."
+        : `Claude Science page match is ${selection.reason}.`,
+      {page_match: selection},
+    );
+  }
+  if (!selection.matched) {
+    throw new OperatorError(
+      selection.reason === "ambiguous" ? "SCIENCE_PAGE_AMBIGUOUS" : "SCIENCE_PAGE_NOT_FOUND",
+      "Could not identify exactly one Claude Science page; no Safari action was taken.",
+      {candidates: selection.candidates},
+    );
+  }
+  if (action === "focus") {
+    const result = await focusSafariPage(selection.candidates[0]);
+    if (result?.ok !== true) {
+      throw new OperatorError(
+        result?.code || "SAFARI_FAILED",
+        "Safari refused to focus the page because its identity changed.",
+      );
+    }
+    return toolResult("Focused the exact Claude Science Safari page for Computer Use.", {
+      page: selection.candidates[0],
+      result,
+    });
+  }
+  if (!["snapshot", "click", "fill"].includes(action)) {
+    throw new OperatorError("INVALID_PARAMS", `Unsupported Safari action: ${action}.`);
+  }
+  if (action !== "snapshot" && optionalBoolean(args.confirm, "confirm", false) !== true) {
+    throw new OperatorError("CONFIRMATION_REQUIRED", `${action} requires confirm=true for the exact page and element.`);
+  }
+  const role = optionalString(args.role, "role", 80);
+  const name = action === "snapshot" ? undefined : requireString(args.name, "name", 1_000);
+  const context = optionalString(args.context, "context", 2_000);
+  const value = action === "fill" ? requireString(args.value, "value") : undefined;
+  const script = buildSciencePageScript({
+    port,
+    projectId,
+    frameId,
+    action,
+    role,
+    name,
+    context,
+    value,
+  });
+  const output = await runSafariPageJavaScript(selection.candidates[0].tab_id, script);
+  let result;
+  try {
+    result = JSON.parse(output);
+  } catch {
+    throw new OperatorError("SAFARI_FAILED", "Safari page operation returned invalid data.");
+  }
+  if (result?.ok !== true) {
+    throw new OperatorError(
+      result?.code || "SAFARI_FAILED",
+      "Safari refused the operation because page or element identity was not exact.",
+      {count: result?.count},
+    );
+  }
+  return toolResult(`Completed exact Claude Science Safari action ${action}.`, {
+    page: selection.candidates[0],
+    result,
+  });
+}
+
 function toolsList() {
   return [
     {
@@ -961,6 +1629,126 @@ function toolsList() {
         additionalProperties: false,
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    {
+      name: "claude_science_list_experts",
+      title: "List Claude Science Experts",
+      description: "List Claude Science experts, enabled state, skills, connectors, and tools. Prompts are omitted unless explicitly requested.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          names: {type: "array", items: {type: "string"}},
+          include_prompt: {type: "boolean", default: false}
+        },
+        additionalProperties: false
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    {
+      name: "claude_science_expert_action",
+      title: "Manage Claude Science Expert",
+      description: "Create, update, enable, delete, or manage prompts, skills, connectors, and exclusions for a Claude Science expert. Writes require confirmation and are never retried.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: [
+              "create",
+              "update",
+              "delete",
+              "set_enabled",
+              "get_prompt",
+              "set_prompt",
+              "delete_prompt",
+              "attach_skill",
+              "detach_skill",
+              "update_skills",
+              "attach_connector",
+              "detach_connector",
+              "set_connector_exclusions"
+            ]
+          },
+          confirm: {type: "boolean", default: false},
+          name: {type: "string"},
+          expert: {type: "object"},
+          patch: {type: "object"},
+          enabled: {type: "boolean"},
+          prompt_text: {type: "string"},
+          skill_name: {type: "string"},
+          attach: {type: "array", items: {type: "string"}},
+          detach: {type: "array", items: {type: "string"}},
+          server_id: {type: "string"},
+          include_tools_pattern: {type: "string"},
+          exclude_tools_pattern: {type: "string"},
+          allow_unauthorized: {type: "boolean"},
+          excluded_tools: {type: "array", items: {type: "string"}}
+        },
+        required: ["action"],
+        additionalProperties: false
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    {
+      name: "claude_science_list_models",
+      title: "List Claude Science Models",
+      description: "List the model catalog currently visible to Claude Science and the default model id.",
+      inputSchema: {
+        type: "object",
+        properties: {provider: {type: "string"}},
+        additionalProperties: false
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    {
+      name: "claude_science_settings",
+      title: "Claude Science Settings",
+      description: "Read or update a guarded allowlist of Claude Science settings: reviewer model, network allowlist, built-in allowlist, telemetry consent, Git identity, Conda mirror, and use intent.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: {type: "string", enum: ["get", "set"]},
+          setting: {
+            type: "string",
+            enum: [
+              "reviewer_model",
+              "allowed_domains",
+              "builtin_allowlist_disabled",
+              "builtin_allowlist_disabled_groups",
+              "telemetry_consent",
+              "git_identity",
+              "conda_mirror",
+              "use_intent"
+            ]
+          },
+          value: {},
+          confirm: {type: "boolean", default: false}
+        },
+        required: ["action", "setting"],
+        additionalProperties: false
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    {
+      name: "claude_science_safari_page",
+      title: "Control Exact Claude Science Safari Page",
+      description: "Freshly discover an exact Claude Science Safari page by current loopback port plus project/frame route, then find, snapshot, click, or fill one semantically exact element. Ambiguous matches never act.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: {type: "string", enum: ["find", "focus", "snapshot", "click", "fill"]},
+          project_id: {type: "string"},
+          frame_id: {type: "string"},
+          role: {type: "string"},
+          name: {type: "string"},
+          context: {type: "string"},
+          value: {type: "string"},
+          confirm: {type: "boolean", default: false}
+        },
+        required: ["action", "project_id"],
+        additionalProperties: false
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     {
       name: "claude_science_list_sessions",
@@ -1044,9 +1832,14 @@ function toolsList() {
   ];
 }
 
-async function callTool(inspector, name, args = {}) {
+export async function callTool(inspector, name, args = {}) {
   if (name === "claude_science_status") return statusOperation(inspector);
   if (name === "claude_science_list_projects") return listProjectsOperation(inspector, args);
+  if (name === "claude_science_list_experts") return listExpertsOperation(inspector, args);
+  if (name === "claude_science_expert_action") return expertActionOperation(inspector, args);
+  if (name === "claude_science_list_models") return listModelsOperation(inspector, args);
+  if (name === "claude_science_settings") return settingsOperation(inspector, args);
+  if (name === "claude_science_safari_page") return safariPageOperation(inspector, args);
   if (name === "claude_science_list_sessions") return listSessionsOperation(inspector, args);
   if (name === "claude_science_submit_task") return submitTaskOperation(inspector, args);
   if (name === "claude_science_continue_session") return continueSessionOperation(inspector, args);

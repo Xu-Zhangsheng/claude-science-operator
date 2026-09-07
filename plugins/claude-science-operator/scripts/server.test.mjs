@@ -10,10 +10,14 @@ import {
   ScienceClient,
   StateUncertainError,
   assertSecureExecutable,
+  buildSciencePageScript,
+  callTool,
   extractSingleControlUrl,
   isApiCompatible,
+  normalizeModelCatalog,
   publicConfig,
   responseCookies,
+  selectExactSciencePage,
   validateControlUrl,
 } from "./server.mjs";
 
@@ -131,7 +135,10 @@ test("compatibility gate is exact", () => {
     portMatches: true,
   };
   assert.equal(isApiCompatible(supported), true);
+  assert.equal(isApiCompatible({ ...supported, scienceVersion: "0.1.25" }), true);
+  assert.equal(isApiCompatible({ ...supported, scienceVersion: "0.1.43" }), true);
   assert.equal(isApiCompatible({ ...supported, scienceVersion: "0.1.21" }), false);
+  assert.equal(isApiCompatible({ ...supported, scienceVersion: "0.1.44" }), false);
   assert.equal(isApiCompatible({ ...supported, schemaVersion: 5 }), false);
   assert.equal(isApiCompatible({ ...supported, portMatches: false }), false);
 });
@@ -300,4 +307,136 @@ test("response size limit fails closed", async () => {
       (error) => error instanceof OperatorError && error.code === "SCIENCE_RESPONSE_LIMIT",
     );
   });
+});
+
+test("exact Safari page selection uses current port and full project/frame route", () => {
+  const tabs = [
+    {
+      window_index: 1,
+      tabs: [
+        {
+          id: "w1-t1",
+          window_index: 1,
+          tab_index: 1,
+          title: "Claude Science",
+          url: "http://localhost:8990/projects/proj-one/frames/frame-one",
+        },
+        {
+          id: "w1-t2",
+          window_index: 1,
+          tab_index: 2,
+          title: "Claude Science",
+          url: "http://localhost:8990/projects/proj-one/frames/frame-two",
+        },
+        {
+          id: "w1-t3",
+          window_index: 1,
+          tab_index: 3,
+          title: "Claude Science",
+          url: "http://localhost:8990/projects/proj-one",
+        },
+        {
+          id: "w1-t4",
+          window_index: 1,
+          tab_index: 4,
+          title: "Claude Science",
+          url: "http://localhost:8991/projects/proj-one/frames/frame-one",
+        },
+      ],
+    },
+  ];
+  const frame = selectExactSciencePage(tabs, {
+    port: 8990,
+    projectId: "proj-one",
+    frameId: "frame-two",
+  });
+  assert.equal(frame.matched, true);
+  assert.equal(frame.candidates[0].tab_id, "w1-t2");
+
+  const project = selectExactSciencePage(tabs, {port: 8990, projectId: "proj-one"});
+  assert.equal(project.matched, true);
+  assert.equal(project.candidates[0].tab_id, "w1-t3");
+});
+
+test("exact Safari page selection fails closed on duplicate candidates", () => {
+  const candidate = {
+    title: "Claude Science",
+    url: "http://127.0.0.1:8990/projects/proj-one/frames/frame-one",
+  };
+  const result = selectExactSciencePage([
+    {tabs: [{...candidate, id: "w1-t1", window_index: 1, tab_index: 1}]},
+    {tabs: [{...candidate, id: "w2-t1", window_index: 2, tab_index: 1}]},
+  ], {port: 8990, projectId: "proj-one", frameId: "frame-one"});
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "ambiguous");
+  assert.equal(result.candidates.length, 2);
+});
+
+test("Safari semantic action script rechecks identity and forbids positional selection", () => {
+  const script = buildSciencePageScript({
+    port: 8990,
+    projectId: "proj-one",
+    frameId: "frame-one",
+    action: "click",
+    role: "menuitemradio",
+    name: "GPT-5.6",
+    context: "More models",
+  });
+  assert.match(script, /SCIENCE_PAGE_IDENTITY_CHANGED/);
+  assert.match(script, /SCIENCE_ELEMENT_AMBIGUOUS/);
+  assert.match(script, /accessibleName\(node\) === normalize\(input\.name\)/);
+  assert.doesNotMatch(script, /nth-child|nth-of-type|querySelector\(/);
+});
+
+test("model catalog normalization preserves provider identity", () => {
+  assert.deepEqual(normalizeModelCatalog({
+    default_model_id: "model-a",
+    models: {
+      provider_a: [{id: "model-a", name: "Model A", overflow: false}],
+      provider_b: [{id: "model-b", name: "Model B", overflow: true}],
+    },
+  }), {
+    default_model_id: "model-a",
+    models: [
+      {provider: "provider_a", id: "model-a", name: "Model A", overflow: false},
+      {provider: "provider_b", id: "model-b", name: "Model B", overflow: true},
+    ],
+  });
+});
+
+test("expert creation and settings writes use exact version-gated routes once", async () => {
+  const calls = [];
+  const inspector = {
+    client: async () => ({
+      request: async (route, options = {}) => {
+        calls.push({route, options});
+        return {ok: true};
+      },
+    }),
+  };
+  await callTool(inspector, "claude_science_expert_action", {
+    action: "create",
+    confirm: true,
+    expert: {
+      name: "My Expert",
+      description: "Test expert",
+      system_prompt: "Be precise.",
+    },
+  });
+  await callTool(inspector, "claude_science_settings", {
+    action: "set",
+    setting: "reviewer_model",
+    value: "model-a",
+    confirm: true,
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].route, "/api/agents");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.write, true);
+  assert.equal(calls[0].options.body.name, "MY_EXPERT");
+  assert.equal(calls[0].options.body.displayName, "My Expert");
+  assert.equal(calls[0].options.body.systemPrompt, "Be precise.");
+  assert.equal(calls[1].route, "/api/preferences/reviewer-model");
+  assert.deepEqual(calls[1].options.body, {model: "model-a"});
+  assert.notEqual(calls[0].options.intentId, calls[1].options.intentId);
 });
