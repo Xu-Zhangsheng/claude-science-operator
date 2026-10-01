@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export const SUPPORTED_SCIENCE_VERSIONS = Object.freeze(["0.1.20", "0.1.25", "0.1.43"]);
+export const SUPPORTED_SCIENCE_VERSIONS = Object.freeze(["0.1.20", "0.1.25", "0.1.43", "0.1.52"]);
 export const SUPPORTED_SCIENCE_VERSION = SUPPORTED_SCIENCE_VERSIONS.at(-1);
 export const SUPPORTED_CSSWITCH_SCHEMA = 4;
 
@@ -26,7 +26,8 @@ const RESPONSE_LIMIT = 4 * 1024 * 1024;
 const CONFIG_LIMIT = 1024 * 1024;
 const READ_TIMEOUT_MS = 15_000;
 const WRITE_TIMEOUT_MS = 45_000;
-const TERMINAL_STATES = new Set(["completed", "succeeded", "done", "failed", "cancelled", "canceled"]);
+const SUCCESS_STATES = new Set(["completed", "succeeded", "done"]);
+const TERMINAL_STATES = new Set([...SUCCESS_STATES, "failed", "cancelled", "canceled"]);
 const ATTENTION_STATES = new Set(["awaiting_plan_approval", "awaiting_user_response"]);
 
 const JsonRpcError = {
@@ -166,6 +167,10 @@ export function isApiCompatible({ scienceVersion, schemaVersion, binaryVerified,
     healthy === true &&
     portMatches === true
   );
+}
+
+export function isScienceHealthyPayload(payload) {
+  return payload?.healthy === true || payload?.status === "healthy" || payload?.ok === true;
 }
 
 export function validateControlUrl(raw, expectedPort) {
@@ -630,10 +635,30 @@ function requestStatusError(status) {
   return new OperatorError("SCIENCE_API_FAILED", `Claude Science API returned HTTP ${status}.`, { status });
 }
 
+// Only these mutation contracts were audited for 0.1.52. Registration of another
+// route is not proof that its payload or side effects are compatible.
+function isAuditedScience0152Mutation(method, route) {
+  if (method === "POST" && route === "/api/projects") return true;
+  if (method === "PUT" && ["/api/preferences/reviewer-model", "/api/preferences/use-intent"].includes(route)) return true;
+  if (method !== "POST") return false;
+  const match = /^\/api\/(projects|frames)\/([A-Za-z0-9._:%-]+)\/(request|message|session-config)$/.exec(route);
+  if (!match || match[0] !== route) return false;
+  let id;
+  try {
+    id = decodeURIComponent(match[2]);
+  } catch {
+    return false;
+  }
+  if (!/^[A-Za-z0-9._:-]+$/.test(id) || id === "." || id === "..") return false;
+  return (match[1] === "projects" && match[3] === "request") ||
+    (match[1] === "frames" && ["message", "session-config"].includes(match[3]));
+}
+
 export class ScienceClient {
   constructor({
     origin,
     port,
+    scienceVersion,
     binary = BINARY_PATH,
     dataDir = SCIENCE_DATA_DIR,
     home = SCIENCE_HOME,
@@ -641,8 +666,12 @@ export class ScienceClient {
     responseLimit = RESPONSE_LIMIT,
     controlUrlProvider,
   }) {
+    if (!SUPPORTED_SCIENCE_VERSIONS.includes(scienceVersion)) {
+      throw new OperatorError("API_INCOMPATIBLE", "A verified supported Claude Science version is required.");
+    }
     this.origin = origin;
     this.port = port;
+    this.scienceVersion = scienceVersion;
     this.binary = binary;
     this.dataDir = dataDir;
     this.home = home;
@@ -718,6 +747,20 @@ export class ScienceClient {
     if (typeof route !== "string" || !route.startsWith("/api/") || route.includes("\\")) {
       throw new OperatorError("SCIENCE_ROUTE_INVALID", "Claude Science route must be an /api/ path.");
     }
+    if (this.scienceVersion === "0.1.52") {
+      const normalizedMethod = typeof method === "string" ? method.toUpperCase() : "";
+      if (write || !["GET", "HEAD"].includes(normalizedMethod)) {
+        if (!isAuditedScience0152Mutation(normalizedMethod, route)) {
+          throw new OperatorError(
+            "API_ACTION_UNSUPPORTED",
+            "This mutation has not been audited for Claude Science 0.1.52; no control session or request was sent.",
+          );
+        }
+        // A mutation remains single-dispatch even if a caller omitted write=true.
+        write = true;
+      }
+      method = normalizedMethod;
+    }
     const send = async () => {
       if (!this.session) await this.authenticate();
       const headers = {
@@ -740,6 +783,12 @@ export class ScienceClient {
         if (write) throw new StateUncertainError(intentId, operation);
         throw new OperatorError("SCIENCE_API_UNAVAILABLE", "Claude Science read request failed.");
       }
+      if (!response.ok && response.status < 500) {
+        // A received rejection is definite even if its optional error body is
+        // malformed, too large, or interrupted. Never expose that body.
+        await response.body?.cancel().catch(() => {});
+        throw requestStatusError(response.status);
+      }
       let text;
       try {
         text = await readBodyLimited(response, this.responseLimit);
@@ -751,7 +800,12 @@ export class ScienceClient {
         if (write && response.status >= 500) throw new StateUncertainError(intentId, operation);
         throw requestStatusError(response.status);
       }
-      return parsePayload(text);
+      try {
+        return parsePayload(text);
+      } catch (error) {
+        if (write) throw new StateUncertainError(intentId, operation);
+        throw error;
+      }
     };
 
     try {
@@ -854,9 +908,7 @@ export class RuntimeInspector {
         });
         const text = await readBodyLimited(response, PROCESS_LIMIT);
         const payload = response.ok ? parsePayload(text) : {};
-        healthy =
-          response.ok &&
-          (payload?.healthy === true || payload?.status === "healthy" || payload?.ok === true);
+        healthy = response.ok && isScienceHealthyPayload(payload);
       } catch (error) {
         healthError = cleanError(error).code;
       }
@@ -918,6 +970,7 @@ export class RuntimeInspector {
     return new ScienceClient({
       origin: `http://127.0.0.1:${port}`,
       port,
+      scienceVersion: status.claudeScience.version,
       binary: this.binary,
       dataDir: this.dataDir,
       home: this.home,
@@ -942,8 +995,14 @@ function selectFields(object, keys) {
   return result;
 }
 
-export function normalizedMessages(data) {
+function messagePageFrom(data, fallback = 0) {
+  const from = data?.from ?? data?.value?.from;
+  return Number.isSafeInteger(from) && from >= 0 ? from : fallback;
+}
+
+export function normalizedMessages(data, fallbackFrom = 0) {
   const messages = listFrom(data, "messages");
+  const from = messagePageFrom(data, fallbackFrom);
   return messages.map((message, index) => {
     const chunks = [];
     const add = (value) => {
@@ -966,8 +1025,10 @@ export function normalizedMessages(data) {
       }
     }
     return {
-      index: Number.isInteger(message?.index) ? message.index : index,
-      id: typeof message?.id === "string" ? message.id : undefined,
+      index: Number.isSafeInteger(message?.index) && message.index >= 0 ? message.index : from + index,
+      id: typeof message?.id === "string"
+        ? message.id
+        : typeof message?._uuid === "string" ? message._uuid : undefined,
       role:
         typeof message?.role === "string"
           ? message.role
@@ -984,18 +1045,25 @@ function normalizeProject(project) {
   return selectFields(project, ["id", "project_id", "name", "title", "status", "created_at", "updated_at"]);
 }
 
+function frameModelFields(frame) {
+  return typeof frame?.model === "string" || frame?.model === null ? {model: frame.model} : {};
+}
+
 function normalizeFrame(frame) {
-  return selectFields(frame, [
-    "id",
-    "frame_id",
-    "root_frame_id",
-    "project_id",
-    "title",
-    "name",
-    "status",
-    "created_at",
-    "updated_at",
-  ]);
+  return {
+    ...selectFields(frame, [
+      "id",
+      "frame_id",
+      "root_frame_id",
+      "project_id",
+      "title",
+      "name",
+      "status",
+      "created_at",
+      "updated_at",
+    ]),
+    ...frameModelFields(frame),
+  };
 }
 
 function normalizeArtifact(artifact) {
@@ -1016,14 +1084,20 @@ function normalizeArtifact(artifact) {
   ]);
 }
 
-function firstId(data, label) {
-  const value =
-    data?.id ?? data?.project_id ?? data?.frame_id ?? data?.root_frame_id ?? data?.value?.id;
-  if (typeof value !== "string" || !value) {
-    throw new OperatorError(
-      "SCIENCE_RESPONSE_INVALID",
-      `Claude Science ${label} response did not contain an id.`,
-    );
+function writeResponseId(data, kind, intentId, operation) {
+  const value = kind === "project"
+    ? data?.id ?? data?.project_id ?? data?.value?.id
+    : data?.id ?? data?.frame_id ?? data?.root_frame_id ?? data?.value?.id;
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > 256 ||
+    !/^[A-Za-z0-9._:-]+$/.test(value) ||
+    value === "." || value === ".."
+  ) {
+    // The write already succeeded at the HTTP boundary. A missing/unsafe ID
+    // prevents reconciliation; it does not prove that the side effect failed.
+    throw new StateUncertainError(intentId, operation);
   }
   return value;
 }
@@ -1043,7 +1117,9 @@ function toolResult(message, structuredContent) {
 async function statusOperation(inspector) {
   const status = await inspector.inspect();
   const summary = status.apiCompatible
-    ? `Claude Science ${status.claudeScience.version} is healthy on loopback port ${status.claudeScience.port}; use the API channel for routine work.`
+    ? status.claudeScience.version === "0.1.52"
+      ? `Claude Science 0.1.52 is healthy on loopback port ${status.claudeScience.port}; the audited core API is available. Unverified expert and other settings mutations remain disabled.`
+      : `Claude Science ${status.claudeScience.version} is healthy on loopback port ${status.claudeScience.port}; use the API channel for routine work.`
     : `Claude Science private API is unavailable (${status.compatibility.reasons.join(", ") || "unknown reason"}); use CSSwitch and Safari through Computer Use.`;
   return toolResult(summary, status);
 }
@@ -1070,14 +1146,199 @@ async function listSessionsOperation(inspector, args) {
   });
 }
 
+const SESSION_CONFIG_FIELDS = Object.freeze(["verifier_mode", "memory_mode", "reviewer_model"]);
+const REQUEST_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+
+function sessionConfigSchema() {
+  return {
+    type: "object",
+    description: "Non-empty explicit persisted knobs only. This is not a full input-menu/effective preset.",
+    properties: {
+      verifier_mode: {type: "string", enum: ["off", "on"], description: "Auto-review, not auto_mode."},
+      memory_mode: {type: "string", enum: ["off", "on"]},
+      reviewer_model: {type: ["string", "null"], description: "Catalog model ID, 1-200 characters, or null to inherit. Never the display label Default."},
+    },
+    additionalProperties: false,
+  };
+}
+
+function expectedSessionConfigSchema() {
+  return {
+    type: "object",
+    description: "Bind a non-empty expected persisted config to this exact existing root. Fresh service readback must match before a message is sent.",
+    properties: {frame_id: {type: "string"}, config: sessionConfigSchema()},
+    required: ["frame_id", "config"],
+    additionalProperties: false,
+  };
+}
+
+function rootSessionId(value) {
+  const id = safeId(value, "frame_id");
+  if (id === "." || id === "..") throw new OperatorError("INVALID_PARAMS", "frame_id must identify an exact root session.");
+  return id;
+}
+
+function isSessionConfigValue(field, value) {
+  if (field === "reviewer_model") {
+    return value === null || (typeof value === "string" && value.length <= 200 && Boolean(value.trim()) && value !== "Default");
+  }
+  return value === "off" || value === "on";
+}
+
+function validatedSessionConfig(value) {
+  const config = requireObject(value, "config", 4096);
+  const entries = Object.entries(config);
+  if (!entries.length) throw new OperatorError("INVALID_PARAMS", "config must contain at least one explicit persisted knob.");
+  for (const [field, item] of entries) {
+    if (!SESSION_CONFIG_FIELDS.includes(field)) {
+      throw new OperatorError("API_ACTION_UNSUPPORTED", "This per-session option cannot be preconfigured by the audited session-config tool.");
+    }
+    if (!isSessionConfigValue(field, item)) {
+      throw new OperatorError("INVALID_PARAMS", "A session-config value does not match the audited type or enum.");
+    }
+  }
+  return config;
+}
+
+function validatedExpectedSessionConfig(value, frameId) {
+  const expected = requireObject(value, "expected_session_config", 8192);
+  if (Object.keys(expected).some((key) => !["frame_id", "config"].includes(key))) {
+    throw new OperatorError("INVALID_PARAMS", "expected_session_config must contain only frame_id and config.");
+  }
+  if (rootSessionId(expected.frame_id) !== frameId) {
+    throw new OperatorError("INVALID_PARAMS", "Expected configuration is not bound to the requested root session.");
+  }
+  return {frame_id: frameId, config: validatedSessionConfig(expected.config)};
+}
+
+function requireAuditedSessionVersion(client) {
+  if (client.scienceVersion !== "0.1.52") {
+    throw new OperatorError("API_ACTION_UNSUPPORTED", "Session configuration and these request-time options are only audited for Claude Science 0.1.52.");
+  }
+}
+
+function optionalRequestEffort(value) {
+  if (value === undefined) return undefined;
+  if (!REQUEST_EFFORTS.includes(value)) {
+    throw new OperatorError("INVALID_PARAMS", "effort must be low, medium, high, xhigh, or max.");
+  }
+  return value;
+}
+
+function optionalRequestDelegation(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new OperatorError("INVALID_PARAMS", "ultra_mode must be boolean; false requests Delegation Off.");
+  return value;
+}
+
+async function readRootSessionConfig(client, frameId) {
+  const frame = await client.request(`/api/frames/${encodeURIComponent(frameId)}`);
+  if (
+    !frame || typeof frame !== "object" || Array.isArray(frame) ||
+    !Object.hasOwn(frame, "id") || !Object.hasOwn(frame, "root_frame_id") || !Object.hasOwn(frame, "parent_frame_id") ||
+    frame.id !== frameId || frame.root_frame_id !== frameId || frame.parent_frame_id !== null
+  ) {
+    throw new OperatorError("SCIENCE_SESSION_INVALID", "The API did not return the exact requested root session.");
+  }
+  const context = frame.context_data && typeof frame.context_data === "object" && !Array.isArray(frame.context_data)
+    ? frame.context_data : {};
+  const config = {};
+  const sources = {};
+  const unverified = [];
+  let configSource = "source_unknown";
+  if (Object.hasOwn(context, "_original_input")) {
+    configSource = "context_data._original_input";
+    const original = context._original_input ?? {};
+    if (typeof original !== "object" || Array.isArray(original)) {
+      throw new OperatorError("SCIENCE_RESPONSE_INVALID", "The authoritative session configuration is malformed.");
+    }
+    for (const field of SESSION_CONFIG_FIELDS) {
+      if (!Object.hasOwn(original, field)) continue;
+      if (!isSessionConfigValue(field, original[field])) {
+        unverified.push(field);
+        continue;
+      }
+      config[field] = original[field];
+      sources[field] = configSource;
+    }
+  }
+  // Do not implement a guessed per-key input_data/delta fallback or copy raw
+  // context. Missing knobs are unknown/inherited, not friendly display defaults.
+  const observed = {frame_id: frameId, root_frame_id: frameId, config, sources, config_source: configSource};
+  if (unverified.length) observed.unverified_fields = unverified;
+  if (Object.hasOwn(frame, "model") && (typeof frame.model === "string" || frame.model === null)) {
+    observed.initial_model = frame.model;
+  }
+  for (const [field, source] of [["active_model", "_model"], ["active_effort", "_effort"]]) {
+    if (Object.hasOwn(context, source) && (typeof context[source] === "string" || context[source] === null)) {
+      observed[field] = context[source];
+      observed[`${field}_source`] = `context_data.${source}`;
+    }
+  }
+  return observed;
+}
+
+function assertSessionConfigMatches(observed, expected) {
+  if (
+    observed.config_source !== "context_data._original_input" ||
+    Object.entries(expected).some(([field, value]) => !Object.hasOwn(observed.config, field) || observed.config[field] !== value)
+  ) {
+    throw new OperatorError("SESSION_CONFIG_UNCONFIRMED", "Fresh service readback did not confirm every expected explicit session knob; no message was sent.");
+  }
+}
+
+async function sessionConfigOperation(inspector, args) {
+  const action = requireString(args.action, "action", 16);
+  if (!["get", "set"].includes(action)) throw new OperatorError("INVALID_PARAMS", "action must be get or set.");
+  const frameId = rootSessionId(args.frame_id);
+  const config = action === "set" ? validatedSessionConfig(args.config) : undefined;
+  if (action === "get" && args.config !== undefined) throw new OperatorError("INVALID_PARAMS", "config is only accepted for action=set.");
+  const intentId = action === "set" ? confirmationIntent(args, "set session config") : undefined;
+  const client = await inspector.client();
+  requireAuditedSessionVersion(client);
+  const before = await readRootSessionConfig(client, frameId);
+  if (action === "get") {
+    return toolResult("Read explicit persisted session knobs and observed runtime selections; missing values are not inferred defaults or a complete menu preset.", before);
+  }
+  const operation = "set session config";
+  const response = await client.request(`/api/frames/${encodeURIComponent(frameId)}/session-config`, {
+    method: "POST", write: true, body: config, intentId, operation,
+  });
+  if (
+    !response || typeof response !== "object" || Array.isArray(response) ||
+    !Object.hasOwn(response, "root_frame_id") || !Object.hasOwn(response, "status") ||
+    response.root_frame_id !== frameId || response.status !== "ok" ||
+    Object.entries(config).some(([field, value]) => !Object.hasOwn(response, field) || response[field] !== value)
+  ) {
+    throw new StateUncertainError(intentId, operation);
+  }
+  let observed;
+  try {
+    observed = await readRootSessionConfig(client, frameId);
+    assertSessionConfigMatches(observed, config);
+  } catch {
+    throw new StateUncertainError(intentId, operation);
+  }
+  return toolResult("Independently confirmed explicit session knobs in storage. This does not preconfigure the full input menu or prove in-flight/effective model settings.", {
+    ...observed, intent_id: intentId, configuration_confirmed: true,
+    configuration_scope: "explicit_persisted_knobs", verified_fields: Object.keys(config),
+  });
+}
+
 async function submitTaskOperation(inspector, args) {
+  if (args.expected_session_config !== undefined) {
+    throw new OperatorError("API_ACTION_UNSUPPORTED", "A new task has no existing root to preconfigure/read back. Use an already existing root; no project or task was created.");
+  }
   const prompt = requireString(args.prompt, "prompt");
   const model = optionalString(args.model, "model", 200);
+  const effort = optionalRequestEffort(args.effort);
+  const ultraMode = optionalRequestDelegation(args.ultra_mode);
   const planMode = optionalBoolean(args.plan_mode, "plan_mode", false);
   let projectId = args.project_id === undefined ? undefined : safeId(args.project_id, "project_id");
   const projectName = optionalString(args.project_name, "project_name", 120) || deriveProjectName(prompt);
   const intentId = crypto.randomUUID();
   const client = await inspector.client();
+  if (effort !== undefined || ultraMode !== undefined) requireAuditedSessionVersion(client);
   let createdProject = false;
   if (!projectId) {
     const created = await client.request("/api/projects", {
@@ -1087,7 +1348,7 @@ async function submitTaskOperation(inspector, args) {
       operation: "create project",
       body: { name: projectName, intent_id: intentId },
     });
-    projectId = firstId(created, "project creation");
+    projectId = writeResponseId(created, "project", intentId, "create project");
     createdProject = true;
   }
   const body = {
@@ -1097,6 +1358,8 @@ async function submitTaskOperation(inspector, args) {
     intent_id: intentId,
   };
   if (model) body.model = model;
+  if (effort !== undefined) body.effort = effort;
+  if (ultraMode !== undefined) body.ultra_mode = ultraMode;
   const response = await client.request(`/api/projects/${encodeURIComponent(projectId)}/request`, {
     method: "POST",
     write: true,
@@ -1104,12 +1367,16 @@ async function submitTaskOperation(inspector, args) {
     operation: "submit task",
     body,
   });
-  const frameId = firstId(response, "task submission");
+  const frameId = writeResponseId(response, "frame", intentId, "submit task");
   return toolResult(`Submitted one Claude Science task to project ${projectId}.`, {
     project_id: projectId,
     frame_id: frameId,
     intent_id: intentId,
     created_project: createdProject,
+    ...(effort !== undefined || ultraMode !== undefined ? {requested_send_options: {
+      ...(model ? {model} : {}), ...(effort !== undefined ? {effort} : {}),
+      ...(ultraMode !== undefined ? {ultra_mode: ultraMode} : {}),
+    }} : {}),
   });
 }
 
@@ -1117,10 +1384,21 @@ async function continueSessionOperation(inspector, args) {
   const frameId = safeId(args.frame_id, "frame_id");
   const prompt = requireString(args.prompt, "prompt");
   const model = optionalString(args.model, "model", 200);
+  const effort = optionalRequestEffort(args.effort);
+  const ultraMode = optionalRequestDelegation(args.ultra_mode);
+  const expected = args.expected_session_config === undefined
+    ? undefined : validatedExpectedSessionConfig(args.expected_session_config, rootSessionId(frameId));
   const intentId = crypto.randomUUID();
   const body = { input_data: { request: prompt }, intent_id: intentId };
   if (model) body.model = model;
+  if (effort !== undefined) body.effort = effort;
+  if (ultraMode !== undefined) body.input_data.ultra_mode = ultraMode;
   const client = await inspector.client();
+  if (expected || effort !== undefined || ultraMode !== undefined) requireAuditedSessionVersion(client);
+  if (expected) {
+    const observed = await readRootSessionConfig(client, frameId);
+    assertSessionConfigMatches(observed, expected.config);
+  }
   const response = await client.request(`/api/frames/${encodeURIComponent(frameId)}/message`, {
     method: "POST",
     write: true,
@@ -1128,11 +1406,22 @@ async function continueSessionOperation(inspector, args) {
     operation: "continue session",
     body,
   });
-  const returnedFrame = response?.id ?? response?.frame_id ?? response?.root_frame_id ?? frameId;
-  return toolResult(`Sent one follow-up task to Claude Science frame ${frameId}.`, {
+  const returnedFrame = writeResponseId(response, "frame", intentId, "continue session");
+  if (expected && (response.root_frame_id !== frameId || returnedFrame !== frameId)) {
+    throw new StateUncertainError(intentId, "continue session");
+  }
+  const summary = expected || effort !== undefined || ultraMode !== undefined
+    ? `Sent one follow-up task to Claude Science frame ${frameId}; request-time selections are not prior persisted or provider-effective proof.`
+    : `Sent one follow-up task to Claude Science frame ${frameId}.`;
+  return toolResult(summary, {
     frame_id: returnedFrame,
     root_frame_id: frameId,
     intent_id: intentId,
+    ...(expected ? {configuration_confirmed: true, configuration_scope: "explicit_persisted_knobs", verified_fields: Object.keys(expected.config)} : {}),
+    ...(effort !== undefined || ultraMode !== undefined ? {requested_send_options: {
+      ...(model ? {model} : {}), ...(effort !== undefined ? {effort} : {}),
+      ...(ultraMode !== undefined ? {ultra_mode: ultraMode} : {}),
+    }} : {}),
   });
 }
 
@@ -1190,7 +1479,8 @@ async function pollSessionOperation(inspector, args) {
   const messageData = await client.request(
     `/api/frames/${encodeURIComponent(frameId)}/messages?${query}`,
   );
-  const messages = normalizedMessages(messageData);
+  const pageFrom = messagePageFrom(messageData, fromMessage);
+  const messages = normalizedMessages(messageData, pageFrom);
   const assistant = messages.filter(
     (message) => /assistant|agent|operon/i.test(message.role || "") && message.text,
   );
@@ -1199,7 +1489,7 @@ async function pollSessionOperation(inspector, args) {
     selectFields(item, ["id", "type", "title", "description", "status", "created_at"]),
   );
   const requiresAttention = ATTENTION_STATES.has(status) || approvals.length > 0;
-  const finalAnswer = TERMINAL_STATES.has(status) ? assistant.at(-1)?.text : undefined;
+  const finalAnswer = SUCCESS_STATES.has(status) ? assistant.at(-1)?.text : undefined;
   const failure = frameFailure(frame);
   return toolResult(`Claude Science frame ${frameId} is ${status}.`, {
     frame_id: frameId,
@@ -1207,9 +1497,10 @@ async function pollSessionOperation(inspector, args) {
     requires_attention: requiresAttention,
     approvals,
     messages,
-    next_from_message: fromMessage + messages.length,
+    next_from_message: pageFrom + messages.length,
     final_answer: finalAnswer,
     failure,
+    ...frameModelFields(frame),
   });
 }
 
@@ -1447,10 +1738,28 @@ export function normalizeModelCatalog(data) {
       });
     }
   }
-  return {
+  const catalog = {
     default_model_id: typeof data?.default_model_id === "string" ? data.default_model_id : undefined,
     models,
   };
+  const authFailed = typeof data?.auth_error === "string" && Boolean(data.auth_error.trim());
+  const fetchFailed = typeof data?.fetch_error === "string" && Boolean(data.fetch_error.trim());
+  // Provider errors may contain private URLs or credentials. Preserve diagnostic
+  // meaning with static summaries, never the underlying exception text.
+  if (authFailed) catalog.auth_error = "Claude Science model authentication failed.";
+  if (fetchFailed) catalog.fetch_error = "Claude Science model catalog fetch failed.";
+  if (["rate_limited", "unavailable"].includes(data?.fetch_error_kind)) {
+    catalog.fetch_error_kind = data.fetch_error_kind;
+  }
+  if (["fallback", "last_good"].includes(data?.models_source)) catalog.models_source = data.models_source;
+  if (data?.model_list_source === "selector") catalog.model_list_source = "selector";
+  for (const field of ["first_party_catalog", "default_model_locked"]) {
+    if (typeof data?.[field] === "boolean") catalog[field] = data[field];
+  }
+  if (authFailed || fetchFailed || catalog.fetch_error_kind || catalog.models_source) {
+    catalog.catalog_usable = false;
+  }
+  return catalog;
 }
 
 async function listModelsOperation(inspector, args) {
@@ -1459,7 +1768,10 @@ async function listModelsOperation(inspector, args) {
   const client = await inspector.client();
   const data = await client.request(`/api/models${query}`);
   const catalog = normalizeModelCatalog(data);
-  return toolResult(`Found ${catalog.models.length} Claude Science model(s).`, catalog);
+  const summary = catalog.catalog_usable === false
+    ? `Claude Science returned ${catalog.models.length} model(s), but the catalog is stale or unavailable. Do not use it to select a model or infer successful provider authentication.`
+    : `Found ${catalog.models.length} Claude Science model(s).`;
+  return toolResult(summary, catalog);
 }
 
 const SETTING_DEFINITIONS = {
@@ -1606,7 +1918,7 @@ async function safariPageOperation(inspector, args) {
   });
 }
 
-function toolsList() {
+export function toolsList() {
   return [
     {
       name: "claude_science_status",
@@ -1766,6 +2078,23 @@ function toolsList() {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     {
+      name: "claude_science_session_config",
+      title: "Read or Set Claude Science Session Configuration",
+      description: "Read or set explicit persisted Auto-review, Memory, and Reviewer override for an existing exact root on audited 0.1.52. Set requires confirm=true, one POST, and independent fresh GET confirmation. Model/effort/delegation are send-time inputs; Specialist/Compute preconfiguration and a complete eight-item menu preset are not supported. Unknown results are never retried.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: {type: "string", enum: ["get", "set"]},
+          frame_id: {type: "string", description: "Existing exact root session, never a child."},
+          config: sessionConfigSchema(),
+          confirm: {type: "boolean", default: false},
+        },
+        required: ["action", "frame_id"],
+        additionalProperties: false,
+      },
+      annotations: {readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true},
+    },
+    {
       name: "claude_science_submit_task",
       title: "Submit Claude Science Task",
       description:
@@ -1777,6 +2106,9 @@ function toolsList() {
           project_id: { type: "string" },
           project_name: { type: "string" },
           model: { type: "string" },
+          effort: {type: "string", enum: [...REQUEST_EFFORTS], description: "Audited 0.1.52 send-time request; model capability may constrain it. Not preconfigured/effective proof."},
+          ultra_mode: {type: "boolean", description: "Audited 0.1.52 send-time delegation request; false means Off."},
+          expected_session_config: {...expectedSessionConfigSchema(), description: "Not supported for new task submission: no existing root can be independently preconfirmed. Supplied guard rejects before any project/task write; use continue_session for an existing root."},
           plan_mode: { type: "boolean", default: false },
         },
         required: ["prompt"],
@@ -1794,6 +2126,9 @@ function toolsList() {
           frame_id: { type: "string" },
           prompt: { type: "string" },
           model: { type: "string" },
+          effort: {type: "string", enum: [...REQUEST_EFFORTS], description: "Audited 0.1.52 send-time request, not independently persisted or provider-effective Max proof."},
+          ultra_mode: {type: "boolean", description: "Audited 0.1.52 delegation is placed inside input_data. False requests Off, not prior storage confirmation."},
+          expected_session_config: expectedSessionConfigSchema(),
         },
         required: ["frame_id", "prompt"],
         additionalProperties: false,
@@ -1839,6 +2174,7 @@ export async function callTool(inspector, name, args = {}) {
   if (name === "claude_science_expert_action") return expertActionOperation(inspector, args);
   if (name === "claude_science_list_models") return listModelsOperation(inspector, args);
   if (name === "claude_science_settings") return settingsOperation(inspector, args);
+  if (name === "claude_science_session_config") return sessionConfigOperation(inspector, args);
   if (name === "claude_science_safari_page") return safariPageOperation(inspector, args);
   if (name === "claude_science_list_sessions") return listSessionsOperation(inspector, args);
   if (name === "claude_science_submit_task") return submitTaskOperation(inspector, args);

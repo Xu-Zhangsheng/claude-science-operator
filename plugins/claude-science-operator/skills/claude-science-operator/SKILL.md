@@ -45,7 +45,30 @@ For every Safari or Computer Use operation:
 
 ## API operations
 
-- Use `claude_science_list_models` before choosing a task or reviewer model.
+- Use `claude_science_list_models` before choosing a task or reviewer model. Stop if
+  `catalog_usable` is false, or authentication/fetch errors or fallback/last-good sources are
+  reported; cached model names do not prove current provider availability.
+- On 0.1.52, only the audited core mutation routes are enabled; other writes fail before
+  authentication/dispatch. Do not bypass this capability gate through another channel.
+- Verify model changes from observed server state, not a request-argument echo. The root
+  frame/session `model` column records initial/display selection and may remain unchanged
+  during continuation. Use the typed runtime-context model observation when available;
+  never substitute the old column for unknown context. Neither proves final provider routing.
+- Prefer `claude_science_session_config` for the supported per-session settings, not global
+  `claude_science_settings` as a substitute for the input menu. For an existing root, record
+  its explicit baseline, set with `confirm: true`, and require independent stored readback.
+  A POST echo is not confirmation; null Reviewer means inheritance, not a fixed model ID.
+- Before sending, bind `expected_session_config` to the exact root and re-read it. Auto-review
+  (`verifier_mode: "on"`), Memory (`memory_mode: "off"`), and Reviewer Default
+  (`reviewer_model: null`) can be persisted before the message. Model, effort Max and
+  Delegation are request-time inputs, not preconfiguration setter fields. Specialist and
+  Compute Local have no certified setter in this bridge. Never claim all eight menu choices
+  were independently preconfigured, use `gpu_mode: "off"` as Local, or send a message when
+  the user requires prior confirmation of an unsupported choice.
+- Before testing preferences, record both value and source. A reviewer `source: default`
+  cannot be restored by PUT null, and undeclared use intent cannot be undeclared again by
+  PUT. Do not promise strict restoration or modify these states without explaining the
+  limitation and obtaining the user's exact intent.
 - Use `claude_science_list_experts` before creating or changing an expert.
 - Use `claude_science_expert_action` for expert creation, update, enabled state, prompt, skills,
   connectors, exclusions, and deletion.

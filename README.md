@@ -1,6 +1,22 @@
-# Claude Science Operator Plugin Marketplace
+# Claude Science Operator — DeepSeek Harness / Codex
 
-This repository contains the Claude Science Operator and CSSwitch Operator Codex plugins.
+This repository contains a **native DeepSeek Harness bundle** and the original Claude Science Operator and CSSwitch Operator Codex plugins.
+
+## DeepSeek Harness 适配
+
+仓库根目录是 `dsh-claude-science-operator` Cordis bundle：原生注册 **20 个工具、2 个技能**，直接复用两个 operator 的控制逻辑，不启动 MCP 子进程，也不需要 Codex。
+
+- 已验证：macOS、DeepSeek Harness `0.2.0-rc.2`、Node.js 24+。
+- 保留 Claude Science 版本白名单、CSSwitch 认证与配置指纹、精确 Safari 页面匹配，以及不确定写入不重试。
+- 0.1.4 增加经[静态接口审计](<docs/science-0152-compatibility.md>)的 Science 0.1.52 核心操作；未核对的写入在认证/发送前拒绝。模型 fallback/失败目录和失败/取消会话不会被算作验收成功。
+- 0.1.5 增加[会话级配置 API](<docs/science-0152-session-config.md>)：现有根会话先配置、独立回读，再带根绑定预期配置发送。Auto-review/Memory/Reviewer 可以预存；模型、Max effort、Delegation 是发送期参数，不会冒充完整八项菜单预配置，Specialist/Compute 未确证的能力不开放。
+- 遵循官方会话权限：完全权限直接沿用已有授权，其他模式逐次审批；拒绝、取消或无人应答时不发送请求。
+- DSH 会持久化工具参数，因此 DSH 版不接受 provider key 参数，密钥必须在 CSSwitch 原生界面输入。
+- 不自带 Computer Use，也不控制 Harness 页面；缺少 GUI 工具时请用户完成原生对话框操作。
+
+安装包由 `npm pack` 生成。在 Harness 插件管理的安装入口填入生成的 `.tgz` **绝对路径**，安装并启用 `dsh-claude-science-operator`。根据管理器返回的生命周期提示决定是否重启。
+
+完整安装、工具目录、权限边界与真实运行时测试见 [DeepSeek Harness 使用说明](docs/deepseek-harness.md)。原 Codex Marketplace 和 MCP 配置保持不变，下面的 Codex 安装命令仅适用于 Codex。
 
 Claude Science Operator uses the version-gated local API for routine project and session work, exact Safari page targeting for visible web UI, and macOS Computer Use for startup, authentication, approvals, uploads, downloads, exports, and artifact interaction. CSSwitch Operator owns the separate authenticated CSSwitch control bridge.
 
@@ -36,13 +52,13 @@ Claude Science Operator uses the version-gated local API for routine project and
 ## Requirements
 
 - macOS
-- Claude Science `0.1.20`, `0.1.25`, or `0.1.43`
+- Claude Science `0.1.20`, `0.1.25`, `0.1.43`, or the bounded audited core of `0.1.52`
 - CSSwitch schema `4`
 - Node.js
 
 The API channel is enabled only when the Claude Science binary, running process, health state, and loopback port all match the supported compatibility contract.
 
-## Install from GitHub
+## Codex: Install from GitHub
 
 Add this repository as a Codex plugin marketplace, then install the plugins:
 
@@ -54,7 +70,7 @@ codex plugin add csswitch-operator@claude-science-split-local
 
 Start a new Codex task after installation so the new skill and MCP server are loaded.
 
-## Install from the package
+## Codex: Install from the package
 
 Download the release archive from the [GitHub Release](https://github.com/Xu-Zhangsheng/claude-science-operator/releases/latest), extract it into `~/plugins/`, and install the desired plugin through a local marketplace entry. The archive contains the marketplace catalog and both plugin directories.
 
@@ -75,9 +91,11 @@ For normal online installation, the GitHub Marketplace method above is recommend
 ## Test
 
 ```bash
-node --test plugins/claude-science-operator/scripts/server.test.mjs
-node --test plugins/csswitch-operator/scripts/server.test.mjs
+npm run check
+npm test
 ```
+
+普通 Node 测试覆盖 280 项；额外 2 项真实 Harness 集成测试和 1 项增强插件兼容性回归需指定安装目录，命令见 [DSH 使用说明](docs/deepseek-harness.md)。
 
 ## Safety
 

@@ -1,0 +1,6 @@
+- insert:
+    - id: dsh-claude-science-operator
+      name: dsh-claude-science-operator
+      # Explicit Config makes this a managed bundle entry, not a legacy
+      # deepseek-harness-zh_pro simple-patch auto-mount candidate.
+      config: {}

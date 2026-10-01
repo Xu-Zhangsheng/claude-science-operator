@@ -1,0 +1,34 @@
+{
+  "name": "dsh-claude-science-operator",
+  "version": "0.1.5",
+  "description": "DeepSeek Harness native Claude Science and CSSwitch operators with session-aware permission checks.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "lib/",
+    "cordis.patch.yml",
+    "README.md",
+    "docs/",
+    "test/",
+    "plugins/claude-science-operator/scripts/server.test.mjs",
+    "plugins/csswitch-operator/scripts/server.test.mjs",
+    "plugins/claude-science-operator/scripts/server.mjs",
+    "plugins/claude-science-operator/skills/",
+    "plugins/csswitch-operator/scripts/server.mjs",
+    "plugins/csswitch-operator/skills/"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs plugins/claude-science-operator/scripts/server.test.mjs plugins/csswitch-operator/scripts/server.test.mjs",
+    "check": "node --check index.mjs && node --check lib/adapter.mjs && node --check plugins/claude-science-operator/scripts/server.mjs && node --check plugins/csswitch-operator/scripts/server.mjs"
+  },
+  "engines": { "node": ">=24" },
+  "peerDependencies": { "@deepseek-ai/dsh": "0.2.0-rc.2" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "keywords": ["dsh-plugin", "deepseek-harness", "claude-science", "csswitch", "research"]
+}

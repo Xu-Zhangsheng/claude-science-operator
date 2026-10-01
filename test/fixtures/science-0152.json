@@ -1,0 +1,229 @@
+{
+  "provenance": {
+    "science_version": "0.1.52",
+    "kind": "synthetic-static-contract-fixtures",
+    "source": "Read-only packed JavaScript in /Applications/Claude Science.app/Contents/Resources/bin/claude-science",
+    "binary_sha256": "d1724ebb97d1917e9a58e229c885c014fa4545d6e54154a425ad00bce8847eb9",
+    "runtime_requests": false,
+    "authentication_verified": false,
+    "notes": [
+      "All projects, frames, models, messages and errors are invented; these are not runtime response captures.",
+      "ihc returns provider-grouped models plus optional catalog source/error metadata. Uvr adds overflow and selector-only model metadata.",
+      "Reviewer PUT always returns source=setting, including model=null. Null means match the session model, not remove an override.",
+      "Project request forwards intent_id. Frame message does not forward intent_id to Ofc; the operator intent is only a local reconciliation identifier.",
+      "ofc/k5o serialize frame_id, from, total and messages. The message window clamps from to total.",
+      "GET frame and frame-list JD expose top-level model (persisted string/null selection), not params.MODEL_SPEC or an operator argument echo. This does not prove the provider's ultimate fallback model.",
+      "Use-intent PUT only accepts commercial/noncommercial and appends a declaration. It cannot undo declared=false; restoring a declared=true fixture restores public state, not history.",
+      "Use-intent fake-client tests document mapper/static semantics only; they do not authorize this write in the separate runtime-version capability gate.",
+      "A fake inspector/client validates operator dispatch/projection only, not Science authentication, the real API, provider access, or server-side deduplication."
+    ],
+    "static_offsets": {
+      "ihc": 72260430,
+      "Uvr": 65290043,
+      "reviewer_model_get": 74832425,
+      "reviewer_model_put": 74832599,
+      "project_request_route": 75194478,
+      "Emc": 72240811,
+      "frame_message_route": 75033855,
+      "Ofc": 72134245,
+      "I5o": 72105576,
+      "ofc": 72117535,
+      "k5o": 72090613,
+      "getFrameMessagesPageJson": 69930248,
+      "JD": 69901765,
+      "tfc": 72113442,
+      "use_intent_get": 74808679,
+      "use_intent_default": 67658278
+    }
+  },
+  "models": {
+    "standard": {
+      "models": {
+        "anthropic": [
+          { "id": "model-alpha-fixture", "name": "Synthetic Alpha" },
+          { "id": "model-beta-fixture", "name": "Synthetic Beta" }
+        ]
+      },
+      "default_model_id": "model-alpha-fixture"
+    },
+    "selector": {
+      "models": {
+        "anthropic": [
+          {
+            "id": "model-alpha-fixture",
+            "name": "Synthetic Alpha",
+            "overflow": false,
+            "effort": { "supported": true, "options": [{ "id": "high", "name": "High" }] },
+            "description": "Invented selector model",
+            "notice": "Synthetic selector notice"
+          },
+          { "id": "model-beta-fixture", "name": "Synthetic Beta", "overflow": true }
+        ]
+      },
+      "default_model_id": "model-alpha-fixture",
+      "model_list_source": "selector",
+      "first_party_catalog": true,
+      "default_model_locked": true,
+      "selection_source": "synthetic-selection",
+      "default_effort": "high",
+      "model_selector": { "catalog": {}, "state": { "model": "model-alpha-fixture" } }
+    },
+    "auth_fallback": {
+      "models": { "anthropic": [{ "id": "model-alpha-fixture", "name": "Synthetic Alpha" }] },
+      "default_model_id": "model-alpha-fixture",
+      "auth_error": "Synthetic auth failure: PRIVATE_ERROR_FIXTURE_SENTINEL",
+      "models_source": "fallback"
+    },
+    "last_good": {
+      "models": { "anthropic": [{ "id": "model-beta-fixture", "name": "Synthetic Beta" }] },
+      "default_model_id": "model-beta-fixture",
+      "fetch_error": "Synthetic catalog refresh failure: PRIVATE_ERROR_FIXTURE_SENTINEL",
+      "fetch_error_kind": "rate_limited",
+      "models_source": "last_good"
+    },
+    "unavailable": {
+      "models": { "anthropic": [{ "id": "model-alpha-fixture", "name": "Synthetic Alpha" }] },
+      "default_model_id": "model-alpha-fixture",
+      "fetch_error": "Synthetic catalog unavailable: PRIVATE_ERROR_FIXTURE_SENTINEL",
+      "fetch_error_kind": "unavailable",
+      "models_source": "fallback"
+    }
+  },
+  "reviewer": {
+    "default": { "model": "model-alpha-fixture", "source": "default" },
+    "saved": { "model": "model-beta-fixture", "source": "setting" },
+    "match_session": { "model": null, "source": "setting" }
+  },
+  "use_intent": {
+    "undeclared": { "intent": "commercial", "declared": false },
+    "commercial": { "intent": "commercial", "declared": true },
+    "noncommercial": { "intent": "noncommercial", "declared": true }
+  },
+  "project": { "project_id": "proj-contract-fixture", "name": "Synthetic contract project" },
+  "submission": {
+    "root_frame_id": "frame-contract-fixture",
+    "frame_id": "frame-contract-fixture",
+    "status": "accepted"
+  },
+  "continuation": {
+    "accepted": {
+      "root_frame_id": "frame-contract-fixture",
+      "frame_id": "frame-contract-fixture",
+      "status": "accepted"
+    },
+    "queued": {
+      "root_frame_id": "frame-contract-fixture",
+      "frame_id": "frame-contract-fixture",
+      "status": "message_queued"
+    }
+  },
+  "frames": {
+    "completed": {
+      "id": "frame-contract-fixture",
+      "root_frame_id": "frame-contract-fixture",
+      "project_id": "proj-contract-fixture",
+      "agent_name": "OPERON",
+      "status": "completed",
+      "model": "model-alpha-fixture",
+      "output_data": { "response": "Synthetic contract answer.\n\nSecond paragraph." },
+      "context_data": {},
+      "children": []
+    },
+    "processing": {
+      "id": "frame-contract-fixture",
+      "root_frame_id": "frame-contract-fixture",
+      "status": "processing",
+      "output_data": null,
+      "children": []
+    },
+    "awaiting_plan_approval": {
+      "id": "frame-contract-fixture",
+      "root_frame_id": "frame-contract-fixture",
+      "status": "awaiting_plan_approval",
+      "output_data": { "pending_input_requests": [] },
+      "children": []
+    },
+    "failed": {
+      "id": "frame-contract-fixture",
+      "root_frame_id": "frame-contract-fixture",
+      "status": "failed",
+      "output_data": {
+        "error": "Synthetic failure with token_fixture-secret-redaction-marker",
+        "error_kind": "auth_error",
+        "error_status": 401,
+        "stop_reason": "synthetic_failure",
+        "boundary_stop": false,
+        "failure_ts": 1790776800000,
+        "private_fixture_metadata": "PRIVATE_ERROR_FIXTURE_SENTINEL"
+      },
+      "children": []
+    },
+    "cancelled": {
+      "id": "frame-contract-fixture",
+      "root_frame_id": "frame-contract-fixture",
+      "status": "cancelled",
+      "output_data": { "stop_reason": "user_cancelled" },
+      "children": []
+    }
+  },
+  "messages": {
+    "completed": {
+      "frame_id": "frame-contract-fixture",
+      "from": 0,
+      "total": 4,
+      "messages": [
+        { "role": "user", "content": "Synthetic bounded request", "_uuid": "msg-user-fixture" },
+        {
+          "role": "assistant",
+          "_uuid": "msg-tools-fixture",
+          "content": [
+            { "type": "thinking", "thinking": "PRIVATE_THINKING_FIXTURE_SENTINEL" },
+            { "type": "tool_use", "id": "tool-use-fixture", "name": "fixture_tool", "input": { "note": "PRIVATE_TOOL_FIXTURE_SENTINEL" } }
+          ]
+        },
+        {
+          "role": "user",
+          "_uuid": "msg-results-fixture",
+          "content": [{ "type": "tool_result", "tool_use_id": "tool-use-fixture", "content": "Synthetic tool result" }]
+        },
+        {
+          "role": "assistant",
+          "_uuid": "msg-final-fixture",
+          "content": [
+            { "type": "text", "text": "Synthetic contract answer." },
+            { "type": "text", "text": "Second paragraph." }
+          ]
+        }
+      ]
+    },
+    "incremental": {
+      "frame_id": "frame-contract-fixture",
+      "from": 3,
+      "total": 4,
+      "messages": [
+        {
+          "role": "assistant",
+          "_uuid": "msg-final-fixture",
+          "content": [
+            { "type": "text", "text": "Synthetic contract answer." },
+            { "type": "text", "text": "Second paragraph." }
+          ]
+        }
+      ]
+    },
+    "clamped_empty": {
+      "frame_id": "frame-contract-fixture",
+      "from": 4,
+      "total": 4,
+      "messages": []
+    },
+    "intermediate": {
+      "frame_id": "frame-contract-fixture",
+      "from": 0,
+      "total": 1,
+      "messages": [
+        { "role": "assistant", "_uuid": "msg-intermediate-fixture", "content": [{ "type": "text", "text": "Synthetic intermediate work, not a final answer." }] }
+      ]
+    }
+  }
+}

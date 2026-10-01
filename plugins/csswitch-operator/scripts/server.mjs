@@ -263,7 +263,7 @@ function mutationEnvelope(args, operation) {
   };
 }
 
-function toolsList() {
+export function toolsList() {
   const readOnly = {readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false};
   return [
     {

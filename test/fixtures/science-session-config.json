@@ -1,0 +1,157 @@
+{
+  "provenance": {
+    "science_version": "0.1.52",
+    "kind": "synthetic-static-session-contract-fixtures",
+    "binary_sha256": "d1724ebb97d1917e9a58e229c885c014fa4545d6e54154a425ad00bce8847eb9",
+    "runtime_requests": false,
+    "authentication_verified": false,
+    "notes": [
+      "All project IDs, frames, models, messages and values are invented, not private runtime response captures.",
+      "POST session-config returns an echo of supplied knobs. Only a separate GET frame can establish persisted values.",
+      "A present context_data._original_input is authoritative as a whole; missing keys cannot fall back individually to input_data.",
+      "Session reviewer_model=null inherits the application reviewer default. It is not the global reviewer-model preference and is not equivalent to a missing field for verification.",
+      "Root frame.model is an initial/persisted column. Explicit context_data._model and _effort are distinct observations, not proof of final paid provider execution or guaranteed Max effort.",
+      "Observed runtime selections can also differ from an unsent browser draft/menu selection; a GET is not proof that browser-local state was changed.",
+      "Model, effort and delegation have send-time contracts, but no audited no-dispatch session-config setter. Specialist Default and Compute Local are not confirmed by this API.",
+      "The bridge deliberately exposes only verifier_mode, memory_mode and reviewer_model as mutable session configuration, even though the upstream DTO has additional GM knobs. auto_mode is not Auto-review.",
+      "These fake-client tests do not authenticate, access a daemon/provider, authorize a route, or prove that GUI-local menu state was changed."
+    ],
+    "static_offsets": {
+      "session_config_route": 75035560,
+      "KYr": 68185025,
+      "W7_G7": 63793844,
+      "_v": 63793988,
+      "GM": 63794496,
+      "Rfc": 72169462,
+      "repo_patchSessionKnobs": 64999275,
+      "frame_patchSessionKnobs": 69920806,
+      "Dde": 64888562,
+      "dz": 64887229,
+      "frame_model_sources": 64984978,
+      "empty_frame": 72121858,
+      "Emc": 72240811,
+      "Ofc": 72134245,
+      "standard_efforts": 63835378
+    }
+  },
+  "project_id": "proj-session-fixture",
+  "root_id": "frame-session-root-fixture",
+  "menu": {
+    "model": { "label": "Luna fixture", "api_preconfiguration": false, "send_field": "model", "send_value": "model-luna-fixture" },
+    "reasoning_effort": { "label": "Max", "api_preconfiguration": false, "send_field": "effort", "send_value": "max", "may_be_capped_by_model": true },
+    "delegation": { "label": "Off", "api_preconfiguration": false, "project_request_field": "ultra_mode", "project_request_value": false, "continuation_input_field": "ultra_mode", "continuation_input_value": false },
+    "auto_review": { "label": "On", "api_preconfiguration": true, "session_field": "verifier_mode", "session_value": "on" },
+    "reviewer": { "label": "Default", "api_preconfiguration": true, "session_field": "reviewer_model", "session_value": null, "meaning": "inherit reviewer default, not literal effective model" },
+    "memory": { "label": "Off", "api_preconfiguration": true, "session_field": "memory_mode", "session_value": "off" },
+    "specialist": { "label": "Default", "api_preconfiguration": false, "known_no_dispatch_setter": false },
+    "compute": { "label": "Local", "api_preconfiguration": false, "known_no_dispatch_setter": false, "gpu_off_is_not_compute_local": true }
+  },
+  "config": {
+    "before": { "verifier_mode": "off", "memory_mode": "on", "reviewer_model": "model-session-reviewer-fixture" },
+    "desired": { "verifier_mode": "on", "memory_mode": "off", "reviewer_model": null },
+    "guarded": { "verifier_mode": "on", "memory_mode": "off", "reviewer_model": null }
+  },
+  "responses": {
+    "session_config_echo": {
+      "root_frame_id": "frame-session-root-fixture",
+      "verifier_mode": "on",
+      "memory_mode": "off",
+      "reviewer_model": null,
+      "status": "ok"
+    },
+    "continuation": { "root_frame_id": "frame-session-root-fixture", "frame_id": "frame-session-root-fixture", "status": "accepted" },
+    "empty_frame": { "root_frame_id": "frame-session-root-fixture", "project_id": "proj-session-fixture" }
+  },
+  "frames": {
+    "before": {
+      "id": "frame-session-root-fixture",
+      "root_frame_id": "frame-session-root-fixture",
+      "parent_frame_id": null,
+      "project_id": "proj-session-fixture",
+      "status": "completed",
+      "agent_name": "OPERON",
+      "model": "model-sol-fixture",
+      "effort": "high",
+      "input_data": { "request": "Synthetic old input", "verifier_mode": "off", "memory_mode": "on", "reviewer_model": "model-input-reviewer-fixture", "auto_mode": "on" },
+      "context_data": {
+        "_model": "model-luna-fixture",
+        "_effort": "max",
+        "_original_input": {
+          "request": "Synthetic original request",
+          "verifier_mode": "off",
+          "memory_mode": "on",
+          "reviewer_model": "model-session-reviewer-fixture",
+          "auto_mode": "off",
+          "ultra_mode": false
+        },
+        "_messages": [{ "role": "assistant", "content": "PRIVATE_TRANSCRIPT_FIXTURE_SENTINEL" }],
+        "private_fixture_metadata": "PRIVATE_CONTEXT_FIXTURE_SENTINEL"
+      },
+      "children": [],
+      "children_included": false
+    },
+    "after": {
+      "id": "frame-session-root-fixture",
+      "root_frame_id": "frame-session-root-fixture",
+      "parent_frame_id": null,
+      "project_id": "proj-session-fixture",
+      "status": "completed",
+      "agent_name": "OPERON",
+      "model": "model-sol-fixture",
+      "effort": "high",
+      "input_data": { "request": "Synthetic old input", "verifier_mode": "off", "memory_mode": "on", "reviewer_model": "model-input-reviewer-fixture", "auto_mode": "on" },
+      "context_data": {
+        "_model": "model-luna-fixture",
+        "_effort": "max",
+        "_original_input": {
+          "request": "Synthetic original request",
+          "verifier_mode": "on",
+          "memory_mode": "off",
+          "reviewer_model": null,
+          "auto_mode": "off",
+          "ultra_mode": false
+        },
+        "_messages": [{ "role": "assistant", "content": "PRIVATE_TRANSCRIPT_FIXTURE_SENTINEL" }],
+        "private_fixture_metadata": "PRIVATE_CONTEXT_FIXTURE_SENTINEL"
+      },
+      "children": [],
+      "children_included": false
+    },
+    "input_only": {
+      "id": "frame-session-root-fixture",
+      "root_frame_id": "frame-session-root-fixture",
+      "parent_frame_id": null,
+      "project_id": "proj-session-fixture",
+      "status": "completed",
+      "model": "model-sol-fixture",
+      "input_data": { "verifier_mode": "off", "memory_mode": "on", "reviewer_model": "model-input-reviewer-fixture", "auto_mode": "on" },
+      "context_data": {},
+      "children": [],
+      "children_included": false
+    },
+    "missing": {
+      "id": "frame-session-root-fixture",
+      "root_frame_id": "frame-session-root-fixture",
+      "parent_frame_id": null,
+      "project_id": "proj-session-fixture",
+      "status": "completed",
+      "model": "model-sol-fixture",
+      "input_data": {},
+      "context_data": {},
+      "children": [],
+      "children_included": false
+    },
+    "child": {
+      "id": "frame-session-child-fixture",
+      "root_frame_id": "frame-session-root-fixture",
+      "parent_frame_id": "frame-session-root-fixture",
+      "project_id": "proj-session-fixture",
+      "status": "completed",
+      "model": "model-child-fixture",
+      "input_data": {},
+      "context_data": { "_original_input": { "verifier_mode": "on", "memory_mode": "off", "reviewer_model": null } },
+      "children": [],
+      "children_included": false
+    }
+  }
+}

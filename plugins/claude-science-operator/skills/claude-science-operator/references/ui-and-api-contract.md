@@ -7,7 +7,7 @@
 - CSSwitch app: `/Applications/CSSwitch.app`
 - CSSwitch config: `~/.csswitch/config.json`
 - CSSwitch Science data directory: `~/.csswitch/sandbox/home/.claude-science`
-- Supported Claude Science versions: `0.1.20`, `0.1.25`, `0.1.43` (explicit allowlist; unknown versions fall back to GUI)
+- Supported Claude Science versions: `0.1.20`, `0.1.25`, `0.1.43`, and audited core operations for `0.1.52` (explicit allowlist; unknown versions remain fail-closed). On 0.1.52 unreviewed mutation routes are rejected before nonce/authentication or dispatch.
 - Supported CSSwitch schema: `4`
 
 The MCP service reads only CSSwitch mode, ports, schema, experimental-Codex flag, active profile id, and a small allowlist of profile metadata. It never returns profile URLs, keys, secrets, credential references, browser state, or cookies.
@@ -42,7 +42,7 @@ The version-gated bridge uses these loopback routes:
 
 Authentication is generated on demand by `claude-science url --data-dir …`. The control URL must be plain HTTP on exactly `127.0.0.1` or `localhost`, use the configured sandbox port, contain no userinfo or fragment, and contain exactly one valid nonce. `operon_auth`, `operon_csrf`, and the CSRF header stay in memory and are never logged or returned.
 
-Writes are dispatched once with a generated `intent_id`. Transport failure, timeout, or a server failure after dispatch becomes `STATE_UNCERTAIN`; neither the server nor the Skill retries it.
+Writes are dispatched once with a generated `intent_id`. Transport failure, timeout, server failure, invalid JSON, or missing required confirmation IDs after dispatch becomes `STATE_UNCERTAIN`; neither this operator nor the Skill retries it. Project creation and session continuation do not forward the intent to a server deduplication service: a local intent ID is not proof of universal server-side idempotency.
 
 ## Session states
 
